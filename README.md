@@ -28,6 +28,22 @@ socket/timer primitives (`net.asyncio`), `process`, `io.file`, `io.dir`, `serde.
 (namespaces/rootfs/seccomp) require a Linux host (root / CAP_SYS_ADMIN). On macOS they degrade cleanly to
 plain process supervision, so the orchestrator still runs.
 
+## Install
+
+```sh
+nova get https://github.com/kamlesh-nb/nova-orchestrator
+```
+
+This clones the package into `~/.nova/cache/nova-orchestrator` and locks it in your `project.json`
+`dependencies`. `nova get` with no argument restores every locked dependency. Imports then resolve from
+the cache — no vendoring:
+
+```nova
+import orch.nativelet;   // resolved from the fetched package
+import net.proxy;
+import os.sandbox;
+```
+
 ## Usage
 
 ```nova
