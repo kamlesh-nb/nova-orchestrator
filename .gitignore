@@ -1,0 +1,4 @@
+__nova_test
+__nova_test.ll
+*.o
+build/
