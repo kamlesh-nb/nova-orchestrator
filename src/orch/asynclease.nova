@@ -40,6 +40,7 @@ pub struct AsyncLeaderLease {
             if (r >= 0) {
                 self.myEpoch = 1;
                 self.isLeader = true;
+                await self.store.setWriteEpoch(1);               // link: raise the store write-fence
                 return true;
             }
             return false;
@@ -57,6 +58,7 @@ pub struct AsyncLeaderLease {
         if (r >= 0) {
             self.myEpoch = newEpoch;
             self.isLeader = true;
+            await self.store.setWriteEpoch(newEpoch);            // link: raise the store write-fence
             return true;
         }
         return false;                                            // lost the takeover race

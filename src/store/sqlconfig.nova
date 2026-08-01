@@ -59,6 +59,15 @@ pub struct SqlConfigStore {
         return next;
     }
 
+    // Declare this node's fencing epoch to the underlying BTreeDB (over the wire): the store then rejects
+    // any client MUTATION stamped below the highest epoch it has seen. Called by the leader lease on
+    // promotion so the store's write-fence rises with the lease epoch. "SET FENCE EPOCH n" is a control
+    // command intercepted by the btree executor (it is never itself fenced).
+    pub async fn setWriteEpoch(self: SqlConfigStore, epoch: long): void {
+        let none = list.List<DbValue>();
+        let _1 = await self.conn.exec("SET FENCE EPOCH " + epoch, none);
+    }
+
     // Current global revision (0 on an empty store).
     pub async fn revision(self: SqlConfigStore): long {
         let none = list.List<DbValue>();
