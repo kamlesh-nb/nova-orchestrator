@@ -121,6 +121,11 @@ the store), not the source of truth.
 - P1 Config-store layer (single node, no replication yet): the KV/config table + the Nova config-store
   API over the existing BTreeDB async driver seam. Orchestrator reads desired state from the store; the
   manifest dir becomes a bootstrap importer. Gate: reconcile works entirely from the store on one node.
+  STATUS (2026-08-02): the etcd-shaped CORE is implemented + unit-tested offline in
+  `src/store/config.nova` (ConfigStore: put/get/revision, list(prefix), cas-on-revision, del, watch-since;
+  test 184, 5 cases green). REMAINING for the P1 gate: a SqlConfigBackend mapping these ops to SQL over
+  the async data.db seam (put -> UPSERT + new revision, cas -> UPDATE ... WHERE revision = ? via
+  ExecResult.rowsAffected), and rewiring the reconcile loop to read desired state from list("workloads/").
 - P2 BTreeDB replication apply side: implement follower receive+apply+ack; wire ship/apply into the db
   lifecycle; a two-node test where a write on the leader appears on the follower and survives a follower
   restart from its checkpoint. Gate: leader/follower byte-consistent under a write workload.
@@ -157,6 +162,11 @@ single operator); then the production layers - bounded RPO (P5), security (P6), 
 finally the chaos suite (P8) that PROVES the RPO/RTO claims the earlier phases only implement.
 
 ## 5. BTreeDB work items (btree repo)
+
+> The DB-provider side of these items is designed in detail in the btree repo:
+> `btree/docs/replication-ha-design.md` (follower/apply, fencing epoch, quorum-ack, backup/restore,
+> leader-lease CAS, the wire additions, phased plan R0-R6, and the test matrix). The list below is the
+> orchestrator-facing summary; that doc is the implementation reference.
 
 1. Undo-log reconstruction on boot (durability correctness). Confirm current behavior with a
    kill-during-uncommitted-txn test; if recovery can drop committed rows, rebuild the undo state from the
