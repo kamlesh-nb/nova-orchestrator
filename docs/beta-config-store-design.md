@@ -163,9 +163,11 @@ the store), not the source of truth.
   applyDmlRecord never logged DML to the follower's WAL, so recover() rebuilt an empty committed-txn set
   and hid every row (each row's xmin is the leader's tx_id). applyStream now logs a commit record per
   applied txn so recover() restores visibility; the restart test asserts the row survives. So P2's
-  "survives a follower restart from its checkpoint" gate is MET for a clean restart. Residual (noted): a
-  crash mid-apply before the pages flush could still lose a committed row -- crash-safety hardening
-  (per-batch page flush before confirmed_seq advances) is a follow-on beyond the clean-restart gate.
+  "survives a follower restart from its checkpoint" gate is MET for a clean restart. CRASH-SAFETY added
+  (2026-08-02, btree a2f908d): applyStream now durableFlush()es the applied pages + page-0 header BEFORE
+  the caller advances confirmed_seq, so a crash mid-apply re-ships from the last durable point rather than
+  losing a committed row. A subprocess kill-mid-apply proof is P8 chaos; the ordering is structural. P2 is
+  now substantially complete (follower lifecycle-wired + apply + fencing + restart-durable + crash-safe).
 - P3 Orchestrator HA (FENCED): leader/standby roles, a leader lease (a CAS row in the store) carrying a
   monotonically increasing FENCING EPOCH, promotion on leader loss, followers reconcile read-only until
   promoted. Every write and every shipped WAL frame carries the epoch; a follower/store REJECTS any write
