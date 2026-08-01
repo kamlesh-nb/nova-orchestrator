@@ -132,8 +132,11 @@ the store), not the source of truth.
   and the manifest dir is an optional bootstrap importer (test 186: start/replace/drop/prefix-isolation/
   stop-all/keep-on-empty, 2 cases). The daemon does the async store fetch and passes entries in, so it
   works with either ConfigStore (sync) or SqlConfigStore (async).
-  REMAINING for the P1 gate: wire SqlConfigStore to the nova-btreedb Driver + a live single-node
-  integration run (the only piece needing a running server).
+  P1 GATE MET (2026-08-02): tests/live/187_sqlconfig_live.nova runs the full API + store-driven reconcile
+  against a REAL btree server (nova-btreedb driver on the reactor); run-live-tests.sh starts/stops a fresh
+  server. The live run required one fix -- BTreeDB UPDATE does not evaluate a column-referencing
+  expression (`SET rev = rev + 1` -> empty tag), so nextRevision is a read-modify-write with an explicit
+  value (`UPDATE ... SET rev = $1`). TEXT PRIMARY KEY + INT + $N params all accepted. **P1 COMPLETE.**
 - P2 BTreeDB replication apply side: implement follower receive+apply+ack; wire ship/apply into the db
   lifecycle; a two-node test where a write on the leader appears on the follower and survives a follower
   restart from its checkpoint. Gate: leader/follower byte-consistent under a write workload.
