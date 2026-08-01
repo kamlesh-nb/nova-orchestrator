@@ -146,6 +146,19 @@ the store), not the source of truth.
   or frame stamped with an epoch older than the highest it has seen, so a partitioned old leader cannot
   commit even before its lease TTL expires. Gate: kill the leader, a standby promotes, and the old leader
   (artificially unpaused after promotion) has its writes REJECTED by fencing - proven, not documented.
+  STATUS (2026-08-02): the ORCHESTRATOR-side policy is DONE + offline-proven in src/orch/lease.nova.
+  LeaderLease over the config-store CAS: a "holder|epoch|deadlineMs" lease row, tryAcquire (CAS-create when
+  free / CAS-on-revision takeover when expired, epoch BUMPED each takeover), renew (only while we still
+  hold it at our epoch), stillLeader, currentEpoch, and haReconcileTick (reconcile ONLY while the valid
+  leader -> standby/fenced node stays read-only). Test 188 (5 cases) proves the GATE: A leads (epoch 1),
+  A partitions, B promotes (epoch 2), unpaused A is FENCED (renew rejected, stops driving) -- and a
+  leader-gated reconcile drives exactly one node's fleet at a time. Since acquire is a CAS, exactly one
+  node wins an epoch; safety rests on the epoch, not clocks (TTL = liveness only). This is the orchestrator
+  mirror of the BTreeDB R2 frame fencing (btree/docs/replication-ha-design.md, done). REMAINING for the P3
+  gate at the DB tier: stamp the epoch on LOCAL COMMIT records + the lease CAS so the STORE itself rejects
+  a lower-epoch write (today fencing is enforced by the lease policy + R2 ship frames; the store-write
+  reject-lower is the btree follow-on). Live multi-node wiring (LeaderLease over SqlConfigStore) is the
+  other remaining piece.
 - P4 Beta line (section 6 checklist). This is the "honest Beta" cut point: ship internally here if needed.
   Gate: the Beta definition-of-done met. Everything below is what makes it PRODUCTION grade.
 - P5 Bounded durability on failover (RPO): make the config write path either sync-replicate to a quorum
