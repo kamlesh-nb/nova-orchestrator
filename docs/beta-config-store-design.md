@@ -187,10 +187,14 @@ the store), not the source of truth.
   max_epoch_seen (persisted); the executor rejects MUTATIONS below the high-water via guardWrite (reads /
   login / txn-boundaries pass, so a fenced node serves reads), test "store-side write fencing" green
   across observe/promote/reopen. So fencing is enforced at BOTH tiers (lease policy + R2 ship frames + the
-  store's own write guard). REMAINING for P3: live multi-node wiring (LeaderLease over the ASYNC
-  SqlConfigStore rather than the sync ConfigStore, driving two real orchestrator nodes against a real
-  btree), and connecting the lease epoch to Database.setWriteEpoch so a promotion actually raises the
-  store's write-fence.
+  store's own write guard). LIVE MULTI-NODE DONE (2026-08-02, commit 8fa3405): AsyncLeaderLease
+  (src/orch/asynclease.nova) is the async sibling over SqlConfigStore; live test 189 drives TWO nodes
+  (each its own btree connection over the SAME btree) contending for one lease row via the store CAS --
+  A leads (epoch 1), A partitions, B promotes (epoch 2), old A FENCED, all against real persistence
+  (offline 11/11, live 2/2). REMAINING P3 tail: auto-link the two fencing tiers -- connect the lease epoch
+  to Database.setWriteEpoch so a promotion actually raises the store's write-fence (both tiers exist and
+  are tested, but a promotion does not yet automatically stamp the store), and drive real cross-node
+  reconcile from the elected leader.
 - P4 Beta line (section 6 checklist). This is the "honest Beta" cut point: ship internally here if needed.
   Gate: the Beta definition-of-done met. Everything below is what makes it PRODUCTION grade.
 - P5 Bounded durability on failover (RPO): make the config write path either sync-replicate to a quorum
@@ -329,7 +333,7 @@ Legend: [B] = Beta line (P0-P4). [P] = Production line (P5-P8).
 | BTreeDB replication (ship+apply) | ReplWal, ReplClient.ship, CheckpointRecord + R1 applyStream apply, R2 Follower/ReplServer over sockets, FollowerState | [B] lifecycle-wire follower into db/server startup; restart-from-checkpoint test |
 | Config store (KV + watch + txn/CAS) | DONE: ConfigStore (in-mem oracle) + SqlConfigStore over the async DB seam, live vs btree (P1) | -- |
 | Orchestrator config source | DONE: reconciles from the store via reconcileFromEntries("workloads/"); manifest dir = bootstrap importer (P1) | -- |
-| Orchestrator HA (fenced) | DONE offline: LeaderLease over the store CAS + fencing epoch + leader-gated reconcile (P3, test 188) | [B] live multi-node lease over SqlConfigStore; wire lease epoch -> Database.setWriteEpoch |
+| Orchestrator HA (fenced) | DONE: LeaderLease over the store CAS + fencing epoch + leader-gated reconcile (offline, test 188) AND AsyncLeaderLease live two-node over SqlConfigStore/btree (test 189) | [B] auto-link lease epoch -> Database.setWriteEpoch on promotion; cross-node reconcile from the leader |
 | Orchestrator Beta hardening | MVP reconcile/restart/probe/autoscale | [B] section 6a checklist |
 | Fencing epoch (split-brain close) | DONE: lease epoch (orch) + R2 frame fencing (Follower) + store-write reject-lower (Database.guardWrite, persisted) | [P] connect promotion -> store setWriteEpoch on the live path |
 | Bounded RPO (quorum-ack) | DONE core: QuorumTracker + awaitQuorum gate; R3-b durable write quorum-acked over a socket (RPO=0, follower verified) | [P] executor per-write durable flag on the commit's repl seq; end-to-end kill/promote gate |
