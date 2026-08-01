@@ -16,6 +16,7 @@ import bytes;
 import list;
 import string;
 import net.asyncio;
+import store.config;
 
 // How many consecutive failed HTTP probes drain a workload's patience before it is restarted.
 const PROBE_FAIL_LIMIT = 3;
@@ -123,6 +124,33 @@ pub struct Nativelet {
         self.reconcileScan(ms);
     }
 
+    // STORE-DRIVEN reconcile (config-store P1): converge toward desired state read from the config store
+    // instead of the manifest directory. `entries` are the store rows under `prefix` (e.g. the result of
+    // ConfigStore.list("workloads/") or `await SqlConfigStore.list("workloads/")`); each entry's key is
+    // "<prefix><name>" and its value is the JSON Spec. The daemon does the (possibly async) fetch and
+    // passes the entries here, so this stays sync + offline-testable and works with either store. The
+    // manifest dir becomes an optional bootstrap importer (load files into the store once), no longer the
+    // source of truth. An empty value is treated like an unreadable manifest: keep a running workload.
+    pub fn reconcileFromEntries(self: Nativelet, entries: list.List<config.ConfigEntry>, prefix: string): void {
+        let ms = list.List<Manifest>();
+        let i = 0;
+        while (i < entries.size()) {
+            let e = entries.get(i) ?? config.ConfigEntry("", "", 0);
+            let key = if (string.startsWith(e.key, prefix))
+                string.slice(e.key, string.len(prefix), string.len(e.key))
+            else
+                e.key;
+            if (string.eql(e.value, "")) {
+                ms.push(Manifest(key, spec.Spec("", ""), false)); // present but empty → keep running
+            } else {
+                let sp = spec.parseSpec(e.value);
+                ms.push(Manifest(key, sp, !string.eql(sp.name, "")));
+            }
+            i = i + 1;
+        }
+        self.reconcileScan(ms);
+    }
+
     // The reconcile DIFF over scanned manifests: start new, replace changed, poll unchanged, keep the
     // ones that failed to read this tick, and stop only workloads whose FILE is genuinely gone.
     pub fn reconcileScan(self: Nativelet, manifests: list.List<Manifest>): void {
@@ -169,6 +197,14 @@ pub struct Nativelet {
                 j = j + 1;
             }
         }
+    }
+
+    // The desired replica count of a workload by name, or -1 if there is no such job (observability /
+    // test signal: lets a caller confirm a store-driven spec change actually replaced the job).
+    pub fn desiredReplicas(self: Nativelet, name: string): int {
+        let at = self.findJobIdx(name);
+        if (at < 0) { return -1; }
+        return (self.jobs.get(at) ?? Job("", supervisor.Supervisor(spec.Spec("", "")), spec.Spec("", ""))).desired.replicas;
     }
 
     // Total replicas running across all workloads (observability / test signal).
