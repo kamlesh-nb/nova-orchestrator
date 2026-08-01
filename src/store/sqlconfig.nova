@@ -45,14 +45,18 @@ pub struct SqlConfigStore {
         }
     }
 
-    // Bump the global revision (single-writer read-modify-write) and return the new value.
+    // Bump the global revision and return the new value. Read-modify-write with an explicit value rather
+    // than `SET rev = rev + 1`: BTreeDB's UPDATE does not evaluate a column-referencing expression (it
+    // returns an empty tag / 0 rows). Single writer, so the read then write is race-free.
     async fn nextRevision(self: SqlConfigStore): int {
-        let none = list.List<DbValue>();
-        let _1 = await self.conn.exec("UPDATE config_meta SET rev = rev + 1 WHERE id = 0", none);
-        let none2 = list.List<DbValue>();
-        let rs = await self.conn.query("SELECT rev FROM config_meta WHERE id = 0", none2);
-        if (rs.rowCount() == 0) { return 0; }
-        return rs.row(0).getInt(0);
+        let sel = list.List<DbValue>();
+        let rs = await self.conn.query("SELECT rev FROM config_meta WHERE id = 0", sel);
+        let cur = if (rs.rowCount() == 0) 0 else rs.row(0).getInt(0);
+        let next = cur + 1;
+        let up = list.List<DbValue>();
+        up.push(dbInt(next));
+        let _1 = await self.conn.exec("UPDATE config_meta SET rev = $1 WHERE id = 0", up);
+        return next;
     }
 
     // Current global revision (0 on an empty store).

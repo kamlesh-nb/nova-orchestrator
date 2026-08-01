@@ -38,8 +38,8 @@ struct FakeConn impl Connection {
     pub async fn exec(self: FakeConn, sql: string, params: List<DbValue>): ExecResult {
         if (string.contains(sql, "CREATE TABLE")) { return ExecResult(0, "OK"); }
         if (string.contains(sql, "config_meta")) {
-            if (string.contains(sql, "UPDATE")) { self.metaRev = self.metaRev + 1; }
-            return ExecResult(1, "OK");           // UPDATE bump or INSERT seed
+            if (string.contains(sql, "UPDATE")) { self.metaRev = params.at(0).asInt(); } // SET rev = $1
+            return ExecResult(1, "OK");           // UPDATE set-value or INSERT seed
         }
         if (string.contains(sql, "DELETE FROM config")) {
             let at = self.find(params.at(0).asText());
