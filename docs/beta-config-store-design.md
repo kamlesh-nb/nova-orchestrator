@@ -154,10 +154,15 @@ the store), not the source of truth.
   consistency harness green (24/24). R2: Follower.recvFrames (FENCE/ORDER/INTEGRITY/APPLY/persist/ack) +
   binary ReplFrames/ReplAck wire types (per-frame CRC32); R2-b ReplServer + ReplClient.shipFrames drive it
   over a real TCP socket (loopback test green). FollowerState persists { max_epoch_seen, confirmed_seq }.
-  REMAINING for the P2 gate: (a) wire the Follower/ReplServer into Database.open / the server startup so a
-  db becomes a live follower automatically (today it is harness-driven, not lifecycle-wired); (b) an
-  explicit follower-restart-from-checkpoint test (confirmed_seq persists, but resume-after-restart is not
-  yet asserted end to end).
+  LIFECYCLE-WIRED (2026-08-02, btree f0937e1): Database.becomeFollower(host, port, wal_dir) makes an
+  opened db a LIVE follower (ReplServer listener on the db's group, applies via applyStream, persists
+  confirmed_seq); main.zig starts it when config.primary == false; close() tears it down. Test proves
+  open + becomeFollower -> a real leader ships -> follower has the row, and reopen RESUMES confirmed_seq
+  from the checkpoint. REMAINING for the P2 gate: a DISCOVERED durability gap -- a restarted follower
+  resumes confirmed_seq but the applied DATA does not survive its own restart (it persists both db-file
+  pages AND an apply-time WAL, and reopen's recover() replays that WAL over the flushed file), so it can
+  claim caught-up while having lost rows. Fix = advance confirmed_seq only after the applied data is
+  crash-durable (or stop the follower apply path double-sourcing). This is the real remaining P2 gate item.
 - P3 Orchestrator HA (FENCED): leader/standby roles, a leader lease (a CAS row in the store) carrying a
   monotonically increasing FENCING EPOCH, promotion on leader loss, followers reconcile read-only until
   promoted. Every write and every shipped WAL frame carries the epoch; a follower/store REJECTS any write
