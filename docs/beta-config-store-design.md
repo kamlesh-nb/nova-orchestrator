@@ -121,11 +121,14 @@ the store), not the source of truth.
 - P1 Config-store layer (single node, no replication yet): the KV/config table + the Nova config-store
   API over the existing BTreeDB async driver seam. Orchestrator reads desired state from the store; the
   manifest dir becomes a bootstrap importer. Gate: reconcile works entirely from the store on one node.
-  STATUS (2026-08-02): the etcd-shaped CORE is implemented + unit-tested offline in
-  `src/store/config.nova` (ConfigStore: put/get/revision, list(prefix), cas-on-revision, del, watch-since;
-  test 184, 5 cases green). REMAINING for the P1 gate: a SqlConfigBackend mapping these ops to SQL over
-  the async data.db seam (put -> UPSERT + new revision, cas -> UPDATE ... WHERE revision = ? via
-  ExecResult.rowsAffected), and rewiring the reconcile loop to read desired state from list("workloads/").
+  STATUS (2026-08-02): the etcd-shaped API exists in TWO forms, both offline-tested:
+  (a) `src/store/config.nova` -- in-memory ConfigStore reference/oracle (test 184, 5 cases);
+  (b) `src/store/sqlconfig.nova` -- SqlConfigStore, the async SQL-backed path over the data.db Connection
+  seam (config + config_meta tables; put = upsert, cas = check-then-bump, list/watch = scan + filter),
+  tested against a FakeConn that simulates the tables (test 185, 5 cases; a sync @test block-drives the
+  async methods). REMAINING for the P1 gate: wire SqlConfigStore to the nova-btreedb Driver + a live
+  integration run, and rewire the reconcile loop to read desired state from list("workloads/") (the
+  manifest dir becoming an optional bootstrap importer).
 - P2 BTreeDB replication apply side: implement follower receive+apply+ack; wire ship/apply into the db
   lifecycle; a two-node test where a write on the leader appears on the follower and survives a follower
   restart from its checkpoint. Gate: leader/follower byte-consistent under a write workload.
