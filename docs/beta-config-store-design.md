@@ -126,9 +126,14 @@ the store), not the source of truth.
   (b) `src/store/sqlconfig.nova` -- SqlConfigStore, the async SQL-backed path over the data.db Connection
   seam (config + config_meta tables; put = upsert, cas = check-then-bump, list/watch = scan + filter),
   tested against a FakeConn that simulates the tables (test 185, 5 cases; a sync @test block-drives the
-  async methods). REMAINING for the P1 gate: wire SqlConfigStore to the nova-btreedb Driver + a live
-  integration run, and rewire the reconcile loop to read desired state from list("workloads/") (the
-  manifest dir becoming an optional bootstrap importer).
+  async methods).
+  Reconcile is REWIRED (2026-08-02): Nativelet.reconcileFromEntries(entries, "workloads/") decodes store
+  rows into the existing source-agnostic reconcileScan diff, so the config store is the source of truth
+  and the manifest dir is an optional bootstrap importer (test 186: start/replace/drop/prefix-isolation/
+  stop-all/keep-on-empty, 2 cases). The daemon does the async store fetch and passes entries in, so it
+  works with either ConfigStore (sync) or SqlConfigStore (async).
+  REMAINING for the P1 gate: wire SqlConfigStore to the nova-btreedb Driver + a live single-node
+  integration run (the only piece needing a running server).
 - P2 BTreeDB replication apply side: implement follower receive+apply+ack; wire ship/apply into the db
   lifecycle; a two-node test where a write on the leader appears on the follower and survives a follower
   restart from its checkpoint. Gate: leader/follower byte-consistent under a write workload.
