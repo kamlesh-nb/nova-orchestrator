@@ -158,11 +158,14 @@ the store), not the source of truth.
   opened db a LIVE follower (ReplServer listener on the db's group, applies via applyStream, persists
   confirmed_seq); main.zig starts it when config.primary == false; close() tears it down. Test proves
   open + becomeFollower -> a real leader ships -> follower has the row, and reopen RESUMES confirmed_seq
-  from the checkpoint. REMAINING for the P2 gate: a DISCOVERED durability gap -- a restarted follower
-  resumes confirmed_seq but the applied DATA does not survive its own restart (it persists both db-file
-  pages AND an apply-time WAL, and reopen's recover() replays that WAL over the flushed file), so it can
-  claim caught-up while having lost rows. Fix = advance confirmed_seq only after the applied data is
-  crash-durable (or stop the follower apply path double-sourcing). This is the real remaining P2 gate item.
+  from the checkpoint. RESTART-DURABILITY FIXED (2026-08-02, btree 02de5d5): the discovered bug was MVCC
+  visibility, not lost bytes -- the applied rows ARE physically durable in the flushed pages, but
+  applyDmlRecord never logged DML to the follower's WAL, so recover() rebuilt an empty committed-txn set
+  and hid every row (each row's xmin is the leader's tx_id). applyStream now logs a commit record per
+  applied txn so recover() restores visibility; the restart test asserts the row survives. So P2's
+  "survives a follower restart from its checkpoint" gate is MET for a clean restart. Residual (noted): a
+  crash mid-apply before the pages flush could still lose a committed row -- crash-safety hardening
+  (per-batch page flush before confirmed_seq advances) is a follow-on beyond the clean-restart gate.
 - P3 Orchestrator HA (FENCED): leader/standby roles, a leader lease (a CAS row in the store) carrying a
   monotonically increasing FENCING EPOCH, promotion on leader loss, followers reconcile read-only until
   promoted. Every write and every shipped WAL frame carries the epoch; a follower/store REJECTS any write
