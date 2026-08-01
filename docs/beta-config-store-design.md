@@ -45,6 +45,14 @@ Three coupled deliverables:
 
 ## 2. Current state (honest)
 
+> UPDATE (2026-08-02): this section is the ORIGINAL baseline. Much of it has since advanced -- see the
+> per-phase STATUS notes in section 4 for the current truth. In short: config is no longer file-only (P1
+> ConfigStore + SqlConfigStore over a live btree, reconcile reads from the store); a leader/standby lease
+> with a fencing epoch exists (P3, orch/lease.nova); and the btree replication follower/apply side is
+> built and tested (R1 apply + R2 fencing over sockets + R2 store-side write fencing + R3 quorum-ack),
+> not "ship side only" as the BTreeDB paragraph below states. Still NOT done: lifecycle-wiring the follower
+> into db/server startup, live multi-node runs, and all of P6-P8 (security, operability, chaos).
+
 ### Orchestrator (packages/nova-orchestrator)
 - `orch/nativelet` is the node agent: watches a JSON MANIFEST DIRECTORY (`Nativelet("manifests")`),
   reconciles desired vs actual, restarts crashed replicas, HTTP-probes and restarts on probe failure,
@@ -140,6 +148,16 @@ the store), not the source of truth.
 - P2 BTreeDB replication apply side: implement follower receive+apply+ack; wire ship/apply into the db
   lifecycle; a two-node test where a write on the leader appears on the follower and survives a follower
   restart from its checkpoint. Gate: leader/follower byte-consistent under a write workload.
+  STATUS (2026-08-02): the apply MECHANISM is DONE + tested in the btree repo (see
+  btree/docs/replication-ha-design.md). R1: Database.applyStream logical apply -- follower re-creates
+  tables + secondary indexes locally (page-independence) and applies insert/update/delete; two-node
+  consistency harness green (24/24). R2: Follower.recvFrames (FENCE/ORDER/INTEGRITY/APPLY/persist/ack) +
+  binary ReplFrames/ReplAck wire types (per-frame CRC32); R2-b ReplServer + ReplClient.shipFrames drive it
+  over a real TCP socket (loopback test green). FollowerState persists { max_epoch_seen, confirmed_seq }.
+  REMAINING for the P2 gate: (a) wire the Follower/ReplServer into Database.open / the server startup so a
+  db becomes a live follower automatically (today it is harness-driven, not lifecycle-wired); (b) an
+  explicit follower-restart-from-checkpoint test (confirmed_seq persists, but resume-after-restart is not
+  yet asserted end to end).
 - P3 Orchestrator HA (FENCED): leader/standby roles, a leader lease (a CAS row in the store) carrying a
   monotonically increasing FENCING EPOCH, promotion on leader loss, followers reconcile read-only until
   promoted. Every write and every shipped WAL frame carries the epoch; a follower/store REJECTS any write
@@ -154,17 +172,30 @@ the store), not the source of truth.
   A partitions, B promotes (epoch 2), unpaused A is FENCED (renew rejected, stops driving) -- and a
   leader-gated reconcile drives exactly one node's fleet at a time. Since acquire is a CAS, exactly one
   node wins an epoch; safety rests on the epoch, not clocks (TTL = liveness only). This is the orchestrator
-  mirror of the BTreeDB R2 frame fencing (btree/docs/replication-ha-design.md, done). REMAINING for the P3
-  gate at the DB tier: stamp the epoch on LOCAL COMMIT records + the lease CAS so the STORE itself rejects
-  a lower-epoch write (today fencing is enforced by the lease policy + R2 ship frames; the store-write
-  reject-lower is the btree follow-on). Live multi-node wiring (LeaderLease over SqlConfigStore) is the
-  other remaining piece.
+  mirror of the BTreeDB R2 frame fencing (btree/docs/replication-ha-design.md, done). The DB-tier
+  STORE-WRITE REJECT-LOWER is now also DONE (btree commit 5b0bf15): Database.fencing_epoch +
+  max_epoch_seen (persisted); the executor rejects MUTATIONS below the high-water via guardWrite (reads /
+  login / txn-boundaries pass, so a fenced node serves reads), test "store-side write fencing" green
+  across observe/promote/reopen. So fencing is enforced at BOTH tiers (lease policy + R2 ship frames + the
+  store's own write guard). REMAINING for P3: live multi-node wiring (LeaderLease over the ASYNC
+  SqlConfigStore rather than the sync ConfigStore, driving two real orchestrator nodes against a real
+  btree), and connecting the lease epoch to Database.setWriteEpoch so a promotion actually raises the
+  store's write-fence.
 - P4 Beta line (section 6 checklist). This is the "honest Beta" cut point: ship internally here if needed.
   Gate: the Beta definition-of-done met. Everything below is what makes it PRODUCTION grade.
 - P5 Bounded durability on failover (RPO): make the config write path either sync-replicate to a quorum
   before ack (writer waits for N/2+1 followers' confirmed-seq to cover the frame) OR expose a per-write
   "durable" flag that does so. State the RPO explicitly (RPO=0 for durable writes; bounded lag for async).
   Gate: kill the leader immediately after a durable-acked write; the promoted follower HAS that write.
+  STATUS (2026-08-02): the quorum-ack MECHANISM is DONE + tested in the btree repo (R3). QuorumTracker:
+  recordAck (monotonic per follower) + coverage/isCovered + quorum = N/2+1 counting the leader;
+  awaitQuorum(seq, timeout) is the durable-commit gate (async writes skip it -> bounded lag). R3-b:
+  ReplClient.shipAndRecord feeds the live ReplAck.confirmed_seq into the tracker, so a durable write is
+  quorum-acked over a REAL socket and the follower is verified to hold the row (RPO=0). REMAINING for the
+  P5 gate: (a) an EXECUTOR per-write durable flag that calls awaitQuorum on the commit's replication seq
+  (needs the commit -> repl-seq linkage); (b) the end-to-end "kill the leader right after a durable ack,
+  promote the follower, it HAS the write" sequence at the orchestrator level (composes P2 lifecycle-wiring
+  + P3 live lease + this gate).
 - P6 Security on every hop: authn + authz on the config-store API (only the orchestrator identity may
   write; RBAC for read scopes), and mutually-authenticated TLS on the replication stream and the client
   connections (reuse the pure-Nova TLS 1.3 stack). No plaintext WAL frames on the wire, no unauthenticated
@@ -285,13 +316,13 @@ Legend: [B] = Beta line (P0-P4). [P] = Production line (P5-P8).
 | Piece | Exists | To build |
 |---|---|---|
 | BTreeDB durability | crash sync/async, WAL-before-page gate | [B] undo-rebuild-on-boot confirm; sync-commit default for config |
-| BTreeDB replication (ship) | ReplWal, ReplClient.ship, CheckpointRecord | [B] follower apply+ack; wiring; leader-lease CAS |
-| Config store (KV + watch + txn/CAS) | nothing | [B] the table + the Nova API over the async DB seam |
-| Orchestrator config source | local JSON manifest dir | [B] read/reconcile from the store; manifest dir as bootstrap importer |
-| Orchestrator HA (fenced) | nothing (single node) | [B] leader/standby, lease, promotion + fencing epoch |
+| BTreeDB replication (ship+apply) | ReplWal, ReplClient.ship, CheckpointRecord + R1 applyStream apply, R2 Follower/ReplServer over sockets, FollowerState | [B] lifecycle-wire follower into db/server startup; restart-from-checkpoint test |
+| Config store (KV + watch + txn/CAS) | DONE: ConfigStore (in-mem oracle) + SqlConfigStore over the async DB seam, live vs btree (P1) | -- |
+| Orchestrator config source | DONE: reconciles from the store via reconcileFromEntries("workloads/"); manifest dir = bootstrap importer (P1) | -- |
+| Orchestrator HA (fenced) | DONE offline: LeaderLease over the store CAS + fencing epoch + leader-gated reconcile (P3, test 188) | [B] live multi-node lease over SqlConfigStore; wire lease epoch -> Database.setWriteEpoch |
 | Orchestrator Beta hardening | MVP reconcile/restart/probe/autoscale | [B] section 6a checklist |
-| Fencing epoch (split-brain close) | nothing | [P] epoch on lease + stamped writes/frames; reject-lower on store+follower |
-| Bounded RPO (quorum-ack) | nothing (async only) | [P] quorum-ack write path + per-write durable flag; stated RPO |
+| Fencing epoch (split-brain close) | DONE: lease epoch (orch) + R2 frame fencing (Follower) + store-write reject-lower (Database.guardWrite, persisted) | [P] connect promotion -> store setWriteEpoch on the live path |
+| Bounded RPO (quorum-ack) | DONE core: QuorumTracker + awaitQuorum gate; R3-b durable write quorum-acked over a socket (RPO=0, follower verified) | [P] executor per-write durable flag on the commit's repl seq; end-to-end kill/promote gate |
 | Security (authn/authz + TLS) | pure-Nova TLS 1.3 stack exists | [P] mutual-TLS on replication+client; RBAC on config API |
 | Backup / restore (PITR) | WAL + checkpoint exist | [P] consistent snapshot off-box; replay-to-seq restore |
 | Rolling upgrade + membership | nothing | [P] drain/promote/upgrade/rejoin; add/remove follower live |
