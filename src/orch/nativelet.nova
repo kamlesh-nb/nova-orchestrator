@@ -86,7 +86,7 @@ pub struct Nativelet {
             let nm = names.get(i) ?? "";
             if (string.endsWith(nm, ".json")) {
                 let key = string.slice(nm, 0, string.len(nm) - 5);   // strip ".json"
-                let text = file.readText(self.manifestsDir + "/" + nm);
+                let text = file.File.readText(self.manifestsDir + "/" + nm);
                 if (string.eql(text, "")) {
                     out.push(Manifest(key, spec.Spec("", ""), false)); // present but unreadable this tick
                 } else {
