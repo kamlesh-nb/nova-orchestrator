@@ -28,11 +28,7 @@ pub struct ConfigEntry {
     pub value: string,
     pub revision: long,
     pub updatedBy: string,
-    // Unix SECONDS, stored as an int (seconds fit int32 until 2038). A numeric decoded from the async btree
-    // driver mis-compares with `>`/`<` on the live path even though its VALUE is correct -- a codegen bug
-    // tracked in memory nova-async-numeric-field-corruption; consumers should trust the value, not gate
-    // control flow on a relational compare of it in-coroutine.
-    pub updatedAt: int,
+    pub updatedAt: long,     // unix seconds of the last write; 0 = unstamped
     init(key: string, value: string, revision: long) {
         self.key = key;
         self.value = value;
@@ -88,7 +84,7 @@ pub struct ConfigStore {
     // Unconditional write WITH an audit trail: `by` = the actor identity, `atSecs` = a caller-supplied
     // unix-seconds timestamp (injected rather than read from a clock so the offline oracle stays
     // deterministic). Bumps the global revision, stamps the entry, returns the new revision.
-    pub fn putBy(self: ConfigStore, key: string, value: string, by: string, atSecs: int): long {
+    pub fn putBy(self: ConfigStore, key: string, value: string, by: string, atSecs: long): long {
         self.rev = self.rev + 1;
         let e = ConfigEntry(key, value, self.rev);
         e.updatedBy = by;
@@ -135,7 +131,7 @@ pub struct ConfigStore {
     }
 
     // CAS with an audit trail (see putBy for the `by`/`atSecs` contract).
-    pub fn casBy(self: ConfigStore, key: string, value: string, expectedRevision: long, by: string, atSecs: int): long {
+    pub fn casBy(self: ConfigStore, key: string, value: string, expectedRevision: long, by: string, atSecs: long): long {
         let i = self.indexOf(key);
         if (expectedRevision == 0) {
             if (i >= 0) { return -1; }        // create-only: must be absent

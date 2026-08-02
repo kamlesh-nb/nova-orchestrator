@@ -18,7 +18,7 @@ struct FakeConn impl Connection {
     pub vals: List<string>,
     pub revs: List<int>,
     pub bys: List<string>,      // updated_by column
-    pub ats: List<string>,      // updated_at column (unix-seconds decimal string; TEXT, see sqlconfig)
+    pub ats: List<int>,         // updated_at column (unix seconds; INT)
     pub metaRev: int,
 
     init() {
@@ -26,7 +26,7 @@ struct FakeConn impl Connection {
         self.vals = List<string>();
         self.revs = List<int>();
         self.bys = List<string>();
-        self.ats = List<string>();
+        self.ats = List<int>();
         self.metaRev = 0;
     }
 
@@ -61,7 +61,7 @@ struct FakeConn impl Connection {
             self.vals.push(params.at(1).asText());
             self.revs.push(params.at(2).asInt());
             self.bys.push(params.at(3).asText());
-            self.ats.push(params.at(4).asText());
+            self.ats.push(params.at(4).asInt());
             return ExecResult(1, "OK");
         }
         if (string.contains(sql, "UPDATE config SET")) {
@@ -69,7 +69,7 @@ struct FakeConn impl Connection {
             let v = params.at(0).asText();
             let rev = params.at(1).asInt();
             let by = params.at(2).asText();
-            let ts = params.at(3).asText();
+            let ts = params.at(3).asInt();
             let at = self.find(params.at(4).asText());
             if (at < 0) { return ExecResult(0, "OK"); }
             self.vals.set(at, v);
@@ -99,7 +99,7 @@ struct FakeConn impl Connection {
                 r.cells.push(dbText(self.vals.at(at)));
                 r.cells.push(dbInt(self.revs.at(at)));
                 r.cells.push(dbText(self.bys.at(at)));
-                r.cells.push(dbText(self.ats.at(at)));
+                r.cells.push(dbInt(self.ats.at(at)));
             } else {
                 r.cells.push(dbInt(self.revs.at(at)));   // SELECT revision ... (exists)
             }
@@ -114,7 +114,7 @@ struct FakeConn impl Connection {
             r.cells.push(dbText(self.vals.at(i)));
             r.cells.push(dbInt(self.revs.at(i)));
             r.cells.push(dbText(self.bys.at(i)));
-            r.cells.push(dbText(self.ats.at(i)));
+            r.cells.push(dbInt(self.ats.at(i)));
             rs.rows.push(r);
             i = i + 1;
         }

@@ -223,16 +223,17 @@ the store), not the source of truth.
     * OBSERVABILITY: Nativelet.status() returns a per-workload WorkloadStatus{name,desired,running,restarts}
       snapshot; underProvisioned() is the single "are we converged?" gauge (count of workloads with running
       < desired); totalRunning() already existed. Scrape each tick for a /metrics line. Test 192.
-  AUDIT COLUMNS DONE (2026-08-03): ConfigEntry gained updatedBy + updatedAt (who/when of the last write);
-  ConfigStore.putBy/casBy stamp them (caller-supplied actor + injected timestamp, deterministic oracle);
-  SqlConfigStore.putBy/casBy stamp updatedBy + updatedAt=datetime.now(), persisted as two extra columns
-  (updated_by TEXT, updated_at TEXT decimal-seconds); get/list read them back. Offline test 185 asserts the
-  numeric value; live 187 asserts updatedBy round-trips through real btree. updatedAt is an int (seconds fit
-  int32 until 2038) stored as TEXT to dodge a driver INT decode issue; a `>`/`<` on a driver-decoded numeric
-  mis-compares on the live async path though the VALUE is correct (open language bug, memory
-  nova-async-numeric-field-corruption). REMAINING Beta-line items (section 6a): an orchestrator self-health/
-  readiness endpoint (distinct from workload probes); and replication-lag as a scraped metric (leader LSN
-  minus follower confirmed-seq, needs a small btree read-out). Offline suite 13/13, live 3/3.
+  AUDIT COLUMNS DONE (2026-08-03): ConfigEntry gained updatedBy (string) + updatedAt (long, unix seconds) =
+  who/when of the last write; ConfigStore.putBy/casBy stamp them (caller-supplied actor + injected
+  timestamp, deterministic oracle); SqlConfigStore.putBy/casBy stamp updatedBy + updatedAt=datetime.now(),
+  persisted as two native columns (updated_by TEXT, updated_at INT), get/list read them via getText/getLong.
+  Offline test 185 asserts both; live 187 asserts updatedBy + updatedAt round-trip through real btree.
+  GOTCHA worth remembering: the audit sub-test in 187 sits at the END because putBy + del each bump the
+  GLOBAL revision counter, so running it mid-test shifts every downstream CAS revision expectation (this
+  briefly looked like a numeric-compare codegen bug -- it was a revision-counter shift, not a compiler bug;
+  the numeric `>` works fine on the live async path). REMAINING Beta-line items (section 6a): an orchestrator
+  self-health/readiness endpoint (distinct from workload probes); and replication-lag as a scraped metric
+  (leader LSN minus follower confirmed-seq, needs a small btree read-out). Offline suite 13/13, live 3/3.
 - P5 Bounded durability on failover (RPO): make the config write path either sync-replicate to a quorum
   before ack (writer waits for N/2+1 followers' confirmed-seq to cover the frame) OR expose a per-write
   "durable" flag that does so. State the RPO explicitly (RPO=0 for durable writes; bounded lag for async).
