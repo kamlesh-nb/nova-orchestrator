@@ -126,6 +126,16 @@ the store), not the source of truth.
 - P0 BTreeDB durability close-out: confirm/land undo-log rebuild on boot; default the config workload to
   sync commit; a crash test that kills the leader mid-write and proves no committed config is lost. Gate:
   btree crash tests green.
+  STATUS (2026-08-03): DONE. (1) synchronous_commit is now a first-class btree yaml config
+  (durability.synchronous_commit, wired in main.zig; SYNCHRONOUS_COMMIT env still overrides), and the
+  orchestrator config-store deployment runs it TRUE (run-live-tests.sh starts the server with
+  SYNCHRONOUS_COMMIT=true) so every acked lease/CAS/workload-spec write is fsync-durable (RPO=0 single node).
+  (2) Crash gate proven by two harnesses: btree/tests/harness/crash_test.sh (load N, kill -9, recover -> all
+  sampled committed rows durable via point-lookup) and the NEW crash_test_midwrite.sh (kill WHILE inserts
+  stream -> a txn is in flight at death; recover() Phase 3 reverts the active txn (the undo-rebuild path) and
+  every OBSERVED-acked row survives, clean recovery). Both PASS. Note found + fixed: the old harness parsed
+  SELECT COUNT(*), which the SQL parser rejects (no aggregates) -- verification is now by point-lookup. (3)
+  Live config-store suite 3/3 with sync-commit on.
 - P1 Config-store layer (single node, no replication yet): the KV/config table + the Nova config-store
   API over the existing BTreeDB async driver seam. Orchestrator reads desired state from the store; the
   manifest dir becomes a bootstrap importer. Gate: reconcile works entirely from the store on one node.
@@ -274,7 +284,7 @@ tests referenced. Legend: DONE / SUBSTANTIALLY (mechanism done, one proof deferr
 
 | Phase | State | Evidence (tests / files) | Remaining to close the gate |
 |---|---|---|---|
-| P0 Durability close-out | PARTIAL | btree crash sync/async 200/200; WAL-before-page gate | undo-log rebuild-on-boot confirm; sync-commit DEFAULT for config workload; kill-leader-mid-write no-loss test |
+| P0 Durability close-out | DONE | btree crash_test.sh (clean) + crash_test_midwrite.sh (mid-write kill, undo-revert) both PASS; synchronous_commit first-class yaml config; config-store deployment defaults sync-commit | -- |
 | P1 Config-store layer | DONE | 184/185/186 offline; 187 live vs real btree | -- |
 | P2 Replication apply side | SUBSTANTIALLY | btree R1 applyStream (24/24), R2 Follower/ReplServer, becomeFollower lifecycle, restart-durable, crash-safe | kill-mid-apply subprocess proof (folds into P8) |
 | P3 Orchestrator HA (fenced) | DONE | 188 offline; 189/190 live two-node; auto-link SET FENCE EPOCH | kill-mid-promotion proof (folds into P8) |
