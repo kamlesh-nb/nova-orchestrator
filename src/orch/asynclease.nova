@@ -106,6 +106,15 @@ pub struct AsyncLeaderLease {
         return lease.decodeLease(cur.value).epoch;
     }
 
+    // The identity currently holding the store's lease row ("" if absent). The observability read-out for the
+    // "leader identity" metric; safety still rests on the epoch, this is display only.
+    pub async fn currentHolder(self: AsyncLeaderLease): string {
+        let has = await self.store.exists(self.key);
+        if (!has) { return ""; }
+        let cur = await self.store.get(self.key) ?? config.ConfigEntry("", "", 0);
+        return lease.decodeLease(cur.value).holder;
+    }
+
     // One HA reconcile tick over the LIVE store -- the async sibling of LeaderLease.haReconcileTick, and the
     // ACTUATION half of P3 (safety is the lease/fencing above). Refresh (or try to take) leadership, and
     // ONLY if we are the valid leader read the desired workloads straight from the store

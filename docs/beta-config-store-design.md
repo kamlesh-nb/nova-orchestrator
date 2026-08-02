@@ -267,6 +267,26 @@ FENCING lands WITH failover in P3 (an unfenced failover is not safe to ship even
 single operator); then the production layers - bounded RPO (P5), security (P6), operability (P7) - and
 finally the chaos suite (P8) that PROVES the RPO/RTO claims the earlier phases only implement.
 
+## 4a. Progress tracker
+
+Single source of truth for phase state. Keep this in sync with the per-phase STATUS notes above and the
+tests referenced. Legend: DONE / SUBSTANTIALLY (mechanism done, one proof deferred) / PARTIAL / TODO.
+
+| Phase | State | Evidence (tests / files) | Remaining to close the gate |
+|---|---|---|---|
+| P0 Durability close-out | PARTIAL | btree crash sync/async 200/200; WAL-before-page gate | undo-log rebuild-on-boot confirm; sync-commit DEFAULT for config workload; kill-leader-mid-write no-loss test |
+| P1 Config-store layer | DONE | 184/185/186 offline; 187 live vs real btree | -- |
+| P2 Replication apply side | SUBSTANTIALLY | btree R1 applyStream (24/24), R2 Follower/ReplServer, becomeFollower lifecycle, restart-durable, crash-safe | kill-mid-apply subprocess proof (folds into P8) |
+| P3 Orchestrator HA (fenced) | DONE | 188 offline; 189/190 live two-node; auto-link SET FENCE EPOCH | kill-mid-promotion proof (folds into P8) |
+| P4 Beta hardening | DONE | 191 rollout safety; 192 status/underProvisioned; audit cols 185+187; 193 health/readyz/metrics (orch/health.nova) | -- (Beta line complete) |
+| P5 Bounded RPO (quorum-ack) | PARTIAL | btree R3 QuorumTracker + awaitQuorum; R3-b durable write RPO=0 over socket | executor per-write durable flag on commit repl-seq; end-to-end kill/promote-durable gate |
+| P6 Security (authn/authz + mTLS) | TODO | pure-Nova TLS 1.3 stack exists to reuse | mutual-TLS on replication + client hops; RBAC on config API; reject unauth writer / wrong-cert follower |
+| P7 Operability (backup/PITR, upgrade, runbooks) | TODO | WAL + checkpoint primitives exist | consistent off-box snapshot + replay-to-seq restore; rolling upgrade w/ rollback; membership add/remove; runbook per failure mode |
+| P8 Chaos + soak (RPO/RTO proof) | TODO | -- | fault-injection suite (kill leader mid-write, partition, kill follower mid-apply, corrupt frame, disk-full, clock skew) + soak; RPO/RTO/no-loss/no-split-brain as numbers |
+
+Beta line (P0-P4): substantially complete -- only P4 endpoint/metrics + P0 formal close-out remain.
+Production line (P5-P8): P5 core exists (wiring remains); P6/P7/P8 are the multi-week production build.
+
 ## 5. BTreeDB work items (btree repo)
 
 > The DB-provider side of these items is designed in detail in the btree repo:
@@ -316,13 +336,20 @@ write volume ever demands multi-writer, which it will not).
   (2026-08-03): updatedBy + updatedAt columns, stamped by putBy/casBy (tests 185 + live 187).
 - Reconcile is idempotent and crash-safe: a mid-reconcile crash re-derives from the store on restart,
   never double-starts or orphans a workload.
-- Health/readiness of the orchestrator itself is exposed (an endpoint), separate from workload probes.
+- Health/readiness of the orchestrator itself is exposed (an endpoint), separate from workload probes. DONE
+  (2026-08-03): orch/health.nova -- HealthReport.healthy()/ready() + healthzText/readyzText (/healthz liveness =
+  store reachable; /readyz = reachable AND a valid unfenced role; a fenced old leader is LIVE but NOT ready),
+  live source via buildHealth(lease, nativelet, lag, latency) + classifyRole (leader/standby/fenced). Test 193.
 - Rollout safety: a bad spec update does not take down healthy replicas (validate before apply; keep the
   last-good revision). DONE (2026-08-03): spec.validateSpec + parse-then-validate in reconcile (test 191).
 - Observability: structured logs + basic metrics (reconcile latency, replica count vs desired, restart
   counts, leader identity, replication lag = leader LSN minus follower confirmed seq). PARTIAL (2026-08-03):
   Nativelet.status()/underProvisioned()/totalRunning() give replica-count-vs-desired + restart counts (test
-  192); leader identity is on the lease row; reconcile latency + replication-lag metric still to wire.
+  192); leader identity is on the lease row. DONE (2026-08-03): orch/health.nova renderMetrics emits a
+  Prometheus scrape -- orch_up/orch_ready/orch_leader_epoch/orch_under_provisioned + per-workload
+  running/desired/restarts, PLUS orch_reconcile_latency_ms (measured by timedReconcile around haReconcileTick
+  via datetime.nowNs) and orch_replication_lag_frames (ReplLag = leader LSN minus follower confirmed-seq, 0 on
+  the leader). Test 193.
 - Bounded blast radius: resource limits + isolation already exist (I4); confirm they are enforced on the
   store-driven path.
 
