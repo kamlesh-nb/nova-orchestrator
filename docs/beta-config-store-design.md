@@ -248,7 +248,16 @@ the store), not the source of truth.
   before ack (writer waits for N/2+1 followers' confirmed-seq to cover the frame) OR expose a per-write
   "durable" flag that does so. State the RPO explicitly (RPO=0 for durable writes; bounded lag for async).
   Gate: kill the leader immediately after a durable-acked write; the promoted follower HAS that write.
-  STATUS (2026-08-02): the quorum-ack MECHANISM is DONE + tested in the btree repo (R3). QuorumTracker:
+  STATUS (2026-08-03): DONE. The btree DurableReplicator is now LIVE-WIRED into the executor's commit path
+  (btree docs R3): a durable commit ships the txn to the follower and blocks on awaitQuorum before acking, so
+  the follower already holds the write when the leader returns -- exactly the "kill right after a durable ack
+  -> promoted follower HAS the write" gate, proven by an in-process real-socket test (RPO=0), plus a negative
+  test where a stopped follower makes the durable write FAIL (never a false ack). Per-write flag: "SET DURABLE
+  COMMIT ON|OFF" (btree executor control command); the config store opts in via SqlConfigStore.setDurable(on).
+  Key fix along the way: buffer at the WAL ship_callback (catches CATALOG records) not the executor, and use a
+  replication seq contiguous from 1 (decoupled from the WAL lsn, which starts at 2). RPO stated: durable=0,
+  async=bounded lag. Full detail below is the ORIGINAL mechanism note.
+  MECHANISM (2026-08-02, the tracker core, now wired above): QuorumTracker:
   recordAck (monotonic per follower) + coverage/isCovered + quorum = N/2+1 counting the leader;
   awaitQuorum(seq, timeout) is the durable-commit gate (async writes skip it -> bounded lag). R3-b:
   ReplClient.shipAndRecord feeds the live ReplAck.confirmed_seq into the tracker, so a durable write is
@@ -289,7 +298,7 @@ tests referenced. Legend: DONE / SUBSTANTIALLY (mechanism done, one proof deferr
 | P2 Replication apply side | SUBSTANTIALLY | btree R1 applyStream (24/24), R2 Follower/ReplServer, becomeFollower lifecycle, restart-durable, crash-safe | kill-mid-apply subprocess proof (folds into P8) |
 | P3 Orchestrator HA (fenced) | DONE | 188 offline; 189/190 live two-node; auto-link SET FENCE EPOCH | kill-mid-promotion proof (folds into P8) |
 | P4 Beta hardening | DONE | 191 rollout safety; 192 status/underProvisioned; audit cols 185+187; 193 health/readyz/metrics (orch/health.nova) | -- (Beta line complete) |
-| P5 Bounded RPO (quorum-ack) | PARTIAL | btree R3 QuorumTracker + awaitQuorum; R3-b durable write RPO=0 over socket | executor per-write durable flag on commit repl-seq; end-to-end kill/promote-durable gate |
+| P5 Bounded RPO (quorum-ack) | DONE | btree DurableReplicator live-wired into executor commit; "SET DURABLE COMMIT" flag; 2 real-socket tests (RPO=0 + no-quorum-fails); SqlConfigStore.setDurable opt-in | -- |
 | P6 Security (authn/authz + mTLS) | TODO | pure-Nova TLS 1.3 stack exists to reuse | mutual-TLS on replication + client hops; RBAC on config API; reject unauth writer / wrong-cert follower |
 | P7 Operability (backup/PITR, upgrade, runbooks) | TODO | WAL + checkpoint primitives exist | consistent off-box snapshot + replay-to-seq restore; rolling upgrade w/ rollback; membership add/remove; runbook per failure mode |
 | P8 Chaos + soak (RPO/RTO proof) | TODO | -- | fault-injection suite (kill leader mid-write, partition, kill follower mid-apply, corrupt frame, disk-full, clock skew) + soak; RPO/RTO/no-loss/no-split-brain as numbers |
@@ -413,7 +422,7 @@ Legend: [B] = Beta line (P0-P4). [P] = Production line (P5-P8).
 | Orchestrator HA (fenced) | DONE: LeaderLease (offline 188) + AsyncLeaderLease live two-node (189) + AUTO-LINK (promotion -> SET FENCE EPOCH over the wire -> db write-fence; frames raise it too) + cross-node reconcile ACTUATION (haReconcileTick, live 190: leader drives, standby read-only, fenced leader stops) | [B] P8 chaos: kill mid-promotion |
 | Fencing epoch (split-brain close) | DONE end to end: lease epoch (orch) + R2 frame fencing + store-write guard, AUTO-LINKED (lease promotion stamps the store via SET FENCE EPOCH; a higher frame epoch stamps a follower) | -- |
 | Orchestrator Beta hardening | MVP reconcile/restart/probe/autoscale | [B] section 6a checklist |
-| Bounded RPO (quorum-ack) | DONE core: QuorumTracker + awaitQuorum gate; R3-b durable write quorum-acked over a socket (RPO=0, follower verified) | [P] executor per-write durable flag on the commit's repl seq; end-to-end kill/promote gate |
+| Bounded RPO (quorum-ack) | DONE: DurableReplicator live-wired into the executor commit (WAL-ship-callback buffer incl. catalog; contiguous repl seq); "SET DURABLE COMMIT" per-write flag; 2 real-socket tests (RPO=0 follower-has-it + no-quorum-fails); SqlConfigStore.setDurable opt-in | -- |
 | Security (authn/authz + TLS) | pure-Nova TLS 1.3 stack exists | [P] mutual-TLS on replication+client; RBAC on config API |
 | Backup / restore (PITR) | WAL + checkpoint exist | [P] consistent snapshot off-box; replay-to-seq restore |
 | Rolling upgrade + membership | nothing | [P] drain/promote/upgrade/rejoin; add/remove follower live |

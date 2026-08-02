@@ -69,6 +69,18 @@ pub struct SqlConfigStore {
         let _1 = await self.conn.exec("SET FENCE EPOCH " + epoch, none);
     }
 
+    // Opt this connection into DURABLE writes (P5, RPO=0): committed lease/CAS/spec writes then block until a
+    // replication quorum has them before acking, so a leader loss right after an ack cannot lose the write.
+    // A no-op unless the btree is a durable leader (started with a follower). "SET DURABLE COMMIT ON|OFF" is a
+    // control command intercepted by the btree executor. Call once, from the FIRST write, so shipped seqs
+    // stay contiguous (the follower enforces order).
+    pub async fn setDurable(self: SqlConfigStore, on: bool): void {
+        let none = list.List<DbValue>();
+        let cmd = "SET DURABLE COMMIT OFF";
+        if (on) { cmd = "SET DURABLE COMMIT ON"; }
+        let _1 = await self.conn.exec(cmd, none);
+    }
+
     // Current global revision (0 on an empty store).
     pub async fn revision(self: SqlConfigStore): long {
         let none = list.List<DbValue>();
