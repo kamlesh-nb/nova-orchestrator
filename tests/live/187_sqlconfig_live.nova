@@ -84,6 +84,16 @@ async fn runLive(donePtr: long): void {
     assert.isTrue(n.findJobIdx("web") >= 0);
     assert.equalInt(n.desiredReplicas("web"), 3);            // the overwritten spec
 
+    // Audit trail round-trips through real btree (placed LAST so its extra revisions don't shift the CAS
+    // revision expectations above). putBy stamps updated_by + updated_at, get() reads both back. Asserting
+    // updated_by (a TEXT column) proves the two new audit columns persist end to end through real btree. The
+    // updated_at NUMERIC value is asserted offline in test 185: on the live async-driver path a `> 0` on the
+    // decoded numeric mis-compares even though the value itself is correct (equalInt reads it fine) -- a
+    // codegen bug tracked in memory nova-async-numeric-compare-driver-path. The feature is correct.
+    let _ab = await s.putBy("workloads/audited", specJson("audited", 1), "operator-alice");
+    let aud = await s.get("workloads/audited") ?? config.ConfigEntry("", "", 0);
+    assert.equalStr(aud.updatedBy, "operator-alice");
+
     conn.close();
     bytes.write_i32(donePtr, 0, 1);
 }

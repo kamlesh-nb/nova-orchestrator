@@ -19,15 +19,26 @@
 import list;
 import string;
 
-// A stored key with the global revision at which it was last written (etcd's mod_revision).
+// A stored key with the global revision at which it was last written (etcd's mod_revision), plus the audit
+// trail of the LAST write: who made it (updatedBy) and when (updatedAt, unix seconds; 0 = unstamped). The
+// 3-arg init leaves the audit fields empty so every existing `?? ConfigEntry(k, v, r)` fallback and the
+// oracle keep compiling unchanged; put/cas stamp them, and the SQL backend persists them as two columns.
 pub struct ConfigEntry {
     pub key: string,
     pub value: string,
     pub revision: long,
+    pub updatedBy: string,
+    // Unix SECONDS, stored as an int (seconds fit int32 until 2038). A numeric decoded from the async btree
+    // driver mis-compares with `>`/`<` on the live path even though its VALUE is correct -- a codegen bug
+    // tracked in memory nova-async-numeric-field-corruption; consumers should trust the value, not gate
+    // control flow on a relational compare of it in-coroutine.
+    pub updatedAt: int,
     init(key: string, value: string, revision: long) {
         self.key = key;
         self.value = value;
         self.revision = revision;
+        self.updatedBy = "";
+        self.updatedAt = 0;
     }
 }
 
@@ -69,14 +80,24 @@ pub struct ConfigStore {
         return self.rev;
     }
 
-    // Unconditional write. Bumps the global revision, stamps the entry, returns the new revision.
+    // Unconditional write by an unnamed actor (the deterministic oracle default; audit fields stay empty).
     pub fn put(self: ConfigStore, key: string, value: string): long {
+        return self.putBy(key, value, "system", 0);
+    }
+
+    // Unconditional write WITH an audit trail: `by` = the actor identity, `atSecs` = a caller-supplied
+    // unix-seconds timestamp (injected rather than read from a clock so the offline oracle stays
+    // deterministic). Bumps the global revision, stamps the entry, returns the new revision.
+    pub fn putBy(self: ConfigStore, key: string, value: string, by: string, atSecs: int): long {
         self.rev = self.rev + 1;
+        let e = ConfigEntry(key, value, self.rev);
+        e.updatedBy = by;
+        e.updatedAt = atSecs;
         let i = self.indexOf(key);
         if (i >= 0) {
-            self.entries.set(i, ConfigEntry(key, value, self.rev));
+            self.entries.set(i, e);
         } else {
-            self.entries.push(ConfigEntry(key, value, self.rev));
+            self.entries.push(e);
         }
         return self.rev;
     }
@@ -110,6 +131,11 @@ pub struct ConfigStore {
     // require the key be ABSENT (a create). On success writes and bumps the global revision, returning it;
     // on a mismatch returns -1 and writes nothing (the caller re-reads and retries).
     pub fn cas(self: ConfigStore, key: string, value: string, expectedRevision: long): long {
+        return self.casBy(key, value, expectedRevision, "system", 0);
+    }
+
+    // CAS with an audit trail (see putBy for the `by`/`atSecs` contract).
+    pub fn casBy(self: ConfigStore, key: string, value: string, expectedRevision: long, by: string, atSecs: int): long {
         let i = self.indexOf(key);
         if (expectedRevision == 0) {
             if (i >= 0) { return -1; }        // create-only: must be absent
@@ -117,7 +143,7 @@ pub struct ConfigStore {
             if (i < 0) { return -1; }         // update-only: must exist
             if (self.entries.at(i).revision != expectedRevision) { return -1; }
         }
-        return self.put(key, value);
+        return self.putBy(key, value, by, atSecs);
     }
 
     // Remove a key. Bumps the global revision so subsequent revision() reflects the change. Returns true

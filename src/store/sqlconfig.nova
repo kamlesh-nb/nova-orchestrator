@@ -20,7 +20,15 @@
 import db;
 import list;
 import string;
+import datetime;
 import store.config;
+
+// Decode a unix-seconds TEXT column to an int (ConfigEntry.updatedAt is int; seconds fit int32 until 2038).
+// updated_at is a TEXT column (decimal seconds), not INT, and the value here is trustworthy; a `>`/`<` on a
+// driver-decoded numeric mis-compares on the live async path (memory nova-async-numeric-field-corruption).
+fn parseUnixSecs(s: string): int {
+    return string.parseI64(s) as int;
+}
 
 pub struct SqlConfigStore {
     conn: Connection,
@@ -33,7 +41,10 @@ pub struct SqlConfigStore {
     // bootstrap (a re-run's CREATE/seed is a harmless no-op on an existing store).
     pub async fn ensureSchema(self: SqlConfigStore): void {
         let none = list.List<DbValue>();
-        let _1 = await self.conn.exec("CREATE TABLE config (k TEXT PRIMARY KEY, v TEXT, revision INT)", none);
+        // updated_at is TEXT (a decimal unix-seconds string), not INT: the driver mis-widens a large INT
+        // column to 64 bits (low 32 correct, high 32 garbage), which breaks a `> 0` on the value. TEXT
+        // round-trips cleanly and is future-proof past the int32 second horizon. See design doc + memory.
+        let _1 = await self.conn.exec("CREATE TABLE config (k TEXT PRIMARY KEY, v TEXT, revision INT, updated_by TEXT, updated_at TEXT)", none);
         let none2 = list.List<DbValue>();
         let _2 = await self.conn.exec("CREATE TABLE config_meta (id INT PRIMARY KEY, rev INT)", none2);
         // Seed the single counter row at 0 only if it is not already there.
@@ -76,22 +87,35 @@ pub struct SqlConfigStore {
         return rs.row(0).getInt(0) as long;
     }
 
-    // Unconditional write. Bumps the global revision, upserts the key at that revision, returns it.
+    // Unconditional write by the default actor ("system"). See putBy for the audit trail.
     pub async fn put(self: SqlConfigStore, key: string, value: string): long {
+        return await self.putBy(key, value, "system");
+    }
+
+    // Unconditional write WITH an audit trail: `by` = the actor identity, stamped alongside updated_at =
+    // datetime.now() (unix seconds, read from the real clock on this live path). Bumps the global revision,
+    // upserts the key at that revision, returns it. Audit columns are APPENDED after revision so the first
+    // three parameter positions match the pre-audit statements.
+    pub async fn putBy(self: SqlConfigStore, key: string, value: string, by: string): long {
         let rev = await self.nextRevision();
+        let at = datetime.now() + "";       // unix seconds as a decimal string (updated_at is TEXT)
         // UPSERT = UPDATE, and INSERT only if it matched nothing (BTreeDB has no ON CONFLICT; single
         // writer makes the update-then-insert race-free).
         let up = list.List<DbValue>();
         up.push(dbText(value));
         up.push(dbInt(rev));
+        up.push(dbText(by));
+        up.push(dbText(at));
         up.push(dbText(key));
-        let ex = await self.conn.exec("UPDATE config SET v = $1, revision = $2 WHERE k = $3", up);
+        let ex = await self.conn.exec("UPDATE config SET v = $1, revision = $2, updated_by = $3, updated_at = $4 WHERE k = $5", up);
         if (ex.rows_affected == 0) {
             let ins = list.List<DbValue>();
             ins.push(dbText(key));
             ins.push(dbText(value));
             ins.push(dbInt(rev));
-            let _1 = await self.conn.exec("INSERT INTO config (k, v, revision) VALUES ($1, $2, $3)", ins);
+            ins.push(dbText(by));
+            ins.push(dbText(at));
+            let _1 = await self.conn.exec("INSERT INTO config (k, v, revision, updated_by, updated_at) VALUES ($1, $2, $3, $4, $5)", ins);
         }
         return rev as long;
     }
@@ -100,10 +124,13 @@ pub struct SqlConfigStore {
     pub async fn get(self: SqlConfigStore, key: string): config.ConfigEntry | undefined {
         let p = list.List<DbValue>();
         p.push(dbText(key));
-        let rs = await self.conn.query("SELECT v, revision FROM config WHERE k = $1", p);
+        let rs = await self.conn.query("SELECT v, revision, updated_by, updated_at FROM config WHERE k = $1", p);
         if (rs.rowCount() == 0) { return undefined; }
         let r = rs.row(0);
-        return config.ConfigEntry(key, r.getText(0), r.getInt(1) as long);
+        let e = config.ConfigEntry(key, r.getText(0), r.getInt(1) as long);
+        e.updatedBy = r.getText(2);
+        e.updatedAt = parseUnixSecs(r.getText(3));
+        return e;
     }
 
     pub async fn exists(self: SqlConfigStore, key: string): bool {
@@ -117,13 +144,16 @@ pub struct SqlConfigStore {
     pub async fn list(self: SqlConfigStore, prefix: string): list.List<config.ConfigEntry> {
         let out = list.List<config.ConfigEntry>();
         let none = list.List<DbValue>();
-        let rs = await self.conn.query("SELECT k, v, revision FROM config", none);
+        let rs = await self.conn.query("SELECT k, v, revision, updated_by, updated_at FROM config", none);
         let i = 0;
         while (i < rs.rowCount()) {
             let r = rs.row(i);
             let k = r.getText(0);
             if (string.startsWith(k, prefix)) {
-                out.push(config.ConfigEntry(k, r.getText(1), r.getInt(2) as long));
+                let e = config.ConfigEntry(k, r.getText(1), r.getInt(2) as long);
+                e.updatedBy = r.getText(3);
+                e.updatedAt = parseUnixSecs(r.getText(4));
+                out.push(e);
             }
             i = i + 1;
         }
@@ -133,6 +163,12 @@ pub struct SqlConfigStore {
     // Compare-and-set on revision. expectedRevision 0 = create-only (must be absent). Returns the new
     // revision on success, or -1 on a mismatch (nothing written). The leader-lease / safe-write primitive.
     pub async fn cas(self: SqlConfigStore, key: string, value: string, expectedRevision: long): long {
+        return await self.casBy(key, value, expectedRevision, "system");
+    }
+
+    // CAS with an audit trail (see putBy for the `by` / updated_at contract).
+    pub async fn casBy(self: SqlConfigStore, key: string, value: string, expectedRevision: long, by: string): long {
+        let at = datetime.now() + "";       // unix seconds as a decimal string (updated_at is TEXT)
         if (expectedRevision == 0) {
             let has = await self.exists(key);
             if (has) { return -1 as long; }         // create-only: must not already exist
@@ -141,7 +177,9 @@ pub struct SqlConfigStore {
             ins.push(dbText(key));
             ins.push(dbText(value));
             ins.push(dbInt(rev));
-            let _1 = await self.conn.exec("INSERT INTO config (k, v, revision) VALUES ($1, $2, $3)", ins);
+            ins.push(dbText(by));
+            ins.push(dbText(at));
+            let _1 = await self.conn.exec("INSERT INTO config (k, v, revision, updated_by, updated_at) VALUES ($1, $2, $3, $4, $5)", ins);
             return rev as long;
         }
         // Guarded update: read the current revision and only bump + write if it STILL matches. Checking
@@ -157,8 +195,10 @@ pub struct SqlConfigStore {
         let up = list.List<DbValue>();
         up.push(dbText(value));
         up.push(dbInt(rev2));
+        up.push(dbText(by));
+        up.push(dbText(at));
         up.push(dbText(key));
-        let _1 = await self.conn.exec("UPDATE config SET v = $1, revision = $2 WHERE k = $3", up);
+        let _1 = await self.conn.exec("UPDATE config SET v = $1, revision = $2, updated_by = $3, updated_at = $4 WHERE k = $5", up);
         return rev2 as long;
     }
 
@@ -178,7 +218,7 @@ pub struct SqlConfigStore {
     pub async fn watch(self: SqlConfigStore, prefix: string, sinceRevision: long): list.List<config.ConfigEvent> {
         let out = list.List<config.ConfigEvent>();
         let none = list.List<DbValue>();
-        let rs = await self.conn.query("SELECT k, v, revision FROM config", none);
+        let rs = await self.conn.query("SELECT k, v, revision, updated_by, updated_at FROM config", none);
         let i = 0;
         while (i < rs.rowCount()) {
             let r = rs.row(i);

@@ -223,9 +223,16 @@ the store), not the source of truth.
     * OBSERVABILITY: Nativelet.status() returns a per-workload WorkloadStatus{name,desired,running,restarts}
       snapshot; underProvisioned() is the single "are we converged?" gauge (count of workloads with running
       < desired); totalRunning() already existed. Scrape each tick for a /metrics line. Test 192.
-  REMAINING Beta-line items (section 6a): an orchestrator self-health/readiness endpoint (distinct from
-  workload probes); who/when audit columns on the config row; and replication-lag as a scraped metric
-  (leader LSN minus follower confirmed-seq -- needs a small btree read-out). Offline suite 13/13, live 3/3.
+  AUDIT COLUMNS DONE (2026-08-03): ConfigEntry gained updatedBy + updatedAt (who/when of the last write);
+  ConfigStore.putBy/casBy stamp them (caller-supplied actor + injected timestamp, deterministic oracle);
+  SqlConfigStore.putBy/casBy stamp updatedBy + updatedAt=datetime.now(), persisted as two extra columns
+  (updated_by TEXT, updated_at TEXT decimal-seconds); get/list read them back. Offline test 185 asserts the
+  numeric value; live 187 asserts updatedBy round-trips through real btree. updatedAt is an int (seconds fit
+  int32 until 2038) stored as TEXT to dodge a driver INT decode issue; a `>`/`<` on a driver-decoded numeric
+  mis-compares on the live async path though the VALUE is correct (open language bug, memory
+  nova-async-numeric-field-corruption). REMAINING Beta-line items (section 6a): an orchestrator self-health/
+  readiness endpoint (distinct from workload probes); and replication-lag as a scraped metric (leader LSN
+  minus follower confirmed-seq, needs a small btree read-out). Offline suite 13/13, live 3/3.
 - P5 Bounded durability on failover (RPO): make the config write path either sync-replicate to a quorum
   before ack (writer waits for N/2+1 followers' confirmed-seq to cover the frame) OR expose a per-write
   "durable" flag that does so. State the RPO explicitly (RPO=0 for durable writes; bounded lag for async).
@@ -304,7 +311,8 @@ write volume ever demands multi-writer, which it will not).
   bootstrap importer only).
 - HA: a standby promotes on leader loss and keeps reconciling from the last committed config (P3), and the
   promotion is FENCED (old leader's writes rejected).
-- Config is versioned (the `revision` column) and changes are auditable (who/when as columns).
+- Config is versioned (the `revision` column) and changes are auditable (who/when as columns). DONE
+  (2026-08-03): updatedBy + updatedAt columns, stamped by putBy/casBy (tests 185 + live 187).
 - Reconcile is idempotent and crash-safe: a mid-reconcile crash re-derives from the store on restart,
   never double-starts or orphans a workload.
 - Health/readiness of the orchestrator itself is exposed (an endpoint), separate from workload probes.

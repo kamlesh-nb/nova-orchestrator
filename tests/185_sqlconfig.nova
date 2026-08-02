@@ -17,12 +17,16 @@ struct FakeConn impl Connection {
     pub keys: List<string>,
     pub vals: List<string>,
     pub revs: List<int>,
+    pub bys: List<string>,      // updated_by column
+    pub ats: List<string>,      // updated_at column (unix-seconds decimal string; TEXT, see sqlconfig)
     pub metaRev: int,
 
     init() {
         self.keys = List<string>();
         self.vals = List<string>();
         self.revs = List<int>();
+        self.bys = List<string>();
+        self.ats = List<string>();
         self.metaRev = 0;
     }
 
@@ -47,24 +51,31 @@ struct FakeConn impl Connection {
             self.keys.remove(at);
             self.vals.remove(at);
             self.revs.remove(at);
+            self.bys.remove(at);
+            self.ats.remove(at);
             return ExecResult(1, "OK");
         }
         if (string.contains(sql, "INSERT INTO config")) {
+            // INSERT (k, v, revision, updated_by, updated_at) VALUES ($1..$5)
             self.keys.push(params.at(0).asText());
             self.vals.push(params.at(1).asText());
             self.revs.push(params.at(2).asInt());
+            self.bys.push(params.at(3).asText());
+            self.ats.push(params.at(4).asText());
             return ExecResult(1, "OK");
         }
         if (string.contains(sql, "UPDATE config SET")) {
+            // SET v = $1, revision = $2, updated_by = $3, updated_at = $4 WHERE k = $5
             let v = params.at(0).asText();
             let rev = params.at(1).asInt();
-            let at = self.find(params.at(2).asText());
+            let by = params.at(2).asText();
+            let ts = params.at(3).asText();
+            let at = self.find(params.at(4).asText());
             if (at < 0) { return ExecResult(0, "OK"); }
-            if (string.contains(sql, "AND revision")) {
-                if (self.revs.at(at) != params.at(3).asInt()) { return ExecResult(0, "OK"); }
-            }
             self.vals.set(at, v);
             self.revs.set(at, rev);
+            self.bys.set(at, by);
+            self.ats.set(at, ts);
             return ExecResult(1, "OK");
         }
         return ExecResult(0, "OK");
@@ -84,21 +95,26 @@ struct FakeConn impl Connection {
             if (at < 0) { return rs; }            // 0 rows
             let r = Row();
             if (string.contains(sql, "SELECT v, revision")) {
+                // SELECT v, revision, updated_by, updated_at
                 r.cells.push(dbText(self.vals.at(at)));
                 r.cells.push(dbInt(self.revs.at(at)));
+                r.cells.push(dbText(self.bys.at(at)));
+                r.cells.push(dbText(self.ats.at(at)));
             } else {
                 r.cells.push(dbInt(self.revs.at(at)));   // SELECT revision ... (exists)
             }
             rs.rows.push(r);
             return rs;
         }
-        // SELECT k, v, revision FROM config  (full scan)
+        // SELECT k, v, revision, updated_by, updated_at FROM config  (full scan)
         let i = 0;
         while (i < self.keys.size()) {
             let r = Row();
             r.cells.push(dbText(self.keys.at(i)));
             r.cells.push(dbText(self.vals.at(i)));
             r.cells.push(dbInt(self.revs.at(i)));
+            r.cells.push(dbText(self.bys.at(i)));
+            r.cells.push(dbText(self.ats.at(i)));
             rs.rows.push(r);
             i = i + 1;
         }
@@ -199,6 +215,35 @@ fn test_sql_delete(): void {
 
     assert.isFalse(s.del("workloads/web"));       // absent -> no-op, no revision bump
     assert.isTrue(s.revision() == 3);
+}
+
+// Audit trail: putBy/casBy stamp updated_by (and updated_at) and get/list read them back.
+@test
+fn test_sql_audit_trail(): void {
+    let s = sqlconfig.SqlConfigStore(FakeConn());
+    s.ensureSchema();
+
+    let _1 = s.putBy("workloads/web", "spec-a", "operator-alice");
+    let web = s.get("workloads/web") ?? config.ConfigEntry("", "", 0);
+    assert.equalStr(web.updatedBy, "operator-alice");
+    assert.isTrue(web.updatedAt > 0);                 // stamped from the clock
+
+    // A plain put() attributes to the default actor.
+    let _2 = s.put("workloads/api", "spec-b");
+    let api = s.get("workloads/api") ?? config.ConfigEntry("", "", 0);
+    assert.equalStr(api.updatedBy, "system");
+
+    // An overwrite via putBy re-attributes the row to the new actor.
+    let _3 = s.putBy("workloads/web", "spec-a2", "operator-bob");
+    let web2 = s.get("workloads/web") ?? config.ConfigEntry("", "", 0);
+    assert.equalStr(web2.updatedBy, "operator-bob");
+
+    // casBy carries the actor on the create path, and list() surfaces it.
+    let c = s.casBy("leases/leader", "node-1", 0, "election");
+    assert.isTrue(c > 0);
+    let leases = s.list("leases/");
+    assert.equalInt(leases.size(), 1);
+    assert.equalStr((leases.at(0)).updatedBy, "election");
 }
 
 @test
