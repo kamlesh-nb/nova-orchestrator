@@ -196,9 +196,19 @@ the store), not the source of truth.
   SqlConfigStore.setWriteEpoch(epoch), which sends "SET FENCE EPOCH n" over the wire -- a btree executor
   control command (intercepted before SQL parse) that calls db.setWriteEpoch(n); and Follower.recvFrames
   now calls db.observeEpoch on adopting a higher frame epoch, so a demoted old leader's btree rejects its
-  own stale-epoch writes. Both fencing tiers are now linked end to end. REMAINING P3 tail: drive real
-  cross-node reconcile from the elected leader (the lease + fencing safety is complete; this is the
-  liveness/actuation half -- leader runs reconcileFromEntries, standby stays read-only, across two nodes).
+  own stale-epoch writes. Both fencing tiers are now linked end to end. ACTUATION HALF DONE (2026-08-02):
+  AsyncLeaderLease.haReconcileTick (async sibling of LeaderLease.haReconcileTick) refreshes/takes leadership
+  and, ONLY while the valid leader, reads desired workloads straight from the store
+  (await store.list(prefix)) and converges the nativelet toward them; a standby or fenced old leader returns
+  before the fetch and never touches workloads. Live test 190 drives TWO nodes over a REAL btree: A wins the
+  lease and reconciles nodeA (2 jobs) while nodeB stays EMPTY (read-only); A partitions and a spec change
+  (web 2 -> 3) lands in the shared store; B promotes (epoch 2) and its tick converges nodeB to the NEW
+  state; the unpaused old A is FENCED, its tick returns false, and nodeA does NOT pick up the change (still
+  web=2) -- so exactly one node drives the fleet at a time and a fenced leader stops driving. run-live-tests
+  .sh now starts a FRESH btree PER test file (the persisted fence high-water is server-global, so a promoting
+  test would poison the next test's low-epoch election). Offline 11/11, live 3/3. P3 (lease + fencing SAFETY
+  + cross-node reconcile ACTUATION) is complete; the remaining tail is P8 chaos proof (subprocess kill mid
+  -promotion) and P5's executor per-write durable flag.
 - P4 Beta line (section 6 checklist). This is the "honest Beta" cut point: ship internally here if needed.
   Gate: the Beta definition-of-done met. Everything below is what makes it PRODUCTION grade.
 - P5 Bounded durability on failover (RPO): make the config write path either sync-replicate to a quorum
@@ -337,7 +347,7 @@ Legend: [B] = Beta line (P0-P4). [P] = Production line (P5-P8).
 | BTreeDB replication (ship+apply) | ReplWal, ReplClient.ship, CheckpointRecord + R1 applyStream apply, R2 Follower/ReplServer over sockets, FollowerState | [B] lifecycle-wire follower into db/server startup; restart-from-checkpoint test |
 | Config store (KV + watch + txn/CAS) | DONE: ConfigStore (in-mem oracle) + SqlConfigStore over the async DB seam, live vs btree (P1) | -- |
 | Orchestrator config source | DONE: reconciles from the store via reconcileFromEntries("workloads/"); manifest dir = bootstrap importer (P1) | -- |
-| Orchestrator HA (fenced) | DONE: LeaderLease (offline 188) + AsyncLeaderLease live two-node (189) + AUTO-LINK (promotion -> SET FENCE EPOCH over the wire -> db write-fence; frames raise it too) | [B] cross-node reconcile from the elected leader (actuation half) |
+| Orchestrator HA (fenced) | DONE: LeaderLease (offline 188) + AsyncLeaderLease live two-node (189) + AUTO-LINK (promotion -> SET FENCE EPOCH over the wire -> db write-fence; frames raise it too) + cross-node reconcile ACTUATION (haReconcileTick, live 190: leader drives, standby read-only, fenced leader stops) | [B] P8 chaos: kill mid-promotion |
 | Fencing epoch (split-brain close) | DONE end to end: lease epoch (orch) + R2 frame fencing + store-write guard, AUTO-LINKED (lease promotion stamps the store via SET FENCE EPOCH; a higher frame epoch stamps a follower) | -- |
 | Orchestrator Beta hardening | MVP reconcile/restart/probe/autoscale | [B] section 6a checklist |
 | Bounded RPO (quorum-ack) | DONE core: QuorumTracker + awaitQuorum gate; R3-b durable write quorum-acked over a socket (RPO=0, follower verified) | [P] executor per-write durable flag on the commit's repl seq; end-to-end kill/promote gate |

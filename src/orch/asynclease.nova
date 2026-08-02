@@ -10,7 +10,9 @@
 import store.config;
 import store.sqlconfig;
 import orch.lease;
+import orch.nativelet;
 import string;
+import list;
 
 pub struct AsyncLeaderLease {
     pub store: sqlconfig.SqlConfigStore,
@@ -102,5 +104,27 @@ pub struct AsyncLeaderLease {
         if (!has) { return 0; }
         let cur = await self.store.get(self.key) ?? config.ConfigEntry("", "", 0);
         return lease.decodeLease(cur.value).epoch;
+    }
+
+    // One HA reconcile tick over the LIVE store -- the async sibling of LeaderLease.haReconcileTick, and the
+    // ACTUATION half of P3 (safety is the lease/fencing above). Refresh (or try to take) leadership, and
+    // ONLY if we are the valid leader read the desired workloads straight from the store
+    // (`await self.store.list(prefix)`) and converge the nativelet toward them. A standby -- or a fenced old
+    // leader -- returns before the fetch and never touches workloads (read-only until promoted), so exactly
+    // one node drives the fleet at a time across live nodes. The store read is the daemon's own async fetch
+    // (unlike the sync sibling, which is handed pre-fetched entries), so this method is self-contained.
+    // Returns whether this node acted as leader this tick.
+    pub async fn haReconcileTick(self: AsyncLeaderLease, n: nativelet.Nativelet, prefix: string, nowMs: long): bool {
+        if (self.isLeader) {
+            let _ = await self.renew(nowMs);
+        } else {
+            let _ = await self.tryAcquire(nowMs);
+        }
+        if (!await self.stillLeader(nowMs)) {
+            return false;                                     // standby / fenced: read-only, do not reconcile
+        }
+        let entries = await self.store.list(prefix);
+        n.reconcileFromEntries(entries, prefix);
+        return true;
     }
 }
