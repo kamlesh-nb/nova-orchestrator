@@ -299,7 +299,7 @@ tests referenced. Legend: DONE / SUBSTANTIALLY (mechanism done, one proof deferr
 | P3 Orchestrator HA (fenced) | DONE | 188 offline; 189/190 live two-node; auto-link SET FENCE EPOCH | kill-mid-promotion proof (folds into P8) |
 | P4 Beta hardening | DONE | 191 rollout safety; 192 status/underProvisioned; audit cols 185+187; 193 health/readyz/metrics (orch/health.nova) | -- (Beta line complete) |
 | P5 Bounded RPO (quorum-ack) | DONE | btree DurableReplicator live-wired into executor commit; "SET DURABLE COMMIT" flag; 2 real-socket tests (RPO=0 + no-quorum-fails); SqlConfigStore.setDurable opt-in | -- |
-| P6 Security (authn/authz + mTLS) | TODO | pure-Nova TLS 1.3 stack exists to reuse | mutual-TLS on replication + client hops; RBAC on config API; reject unauth writer / wrong-cert follower |
+| P6 Security (authn/authz + mTLS) | PARTIAL | REPLICA AUTHZ done: challenge-response HMAC handshake on the replication stream (btree serverAuthenticate/clientAuthenticate; wrong/missing key refused before any frame; test "P6 replica auth handshake" 35/35) | mutual-TLS on replication + client hops; authn/authz (RBAC) on the config API; reject unauth writer |
 | P7 Operability (backup/PITR, upgrade, runbooks) | TODO | WAL + checkpoint primitives exist | consistent off-box snapshot + replay-to-seq restore; rolling upgrade w/ rollback; membership add/remove; runbook per failure mode |
 | P8 Chaos + soak (RPO/RTO proof) | TODO | -- | fault-injection suite (kill leader mid-write, partition, kill follower mid-apply, corrupt frame, disk-full, clock skew) + soak; RPO/RTO/no-loss/no-split-brain as numbers |
 
