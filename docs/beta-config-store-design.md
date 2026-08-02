@@ -300,7 +300,7 @@ tests referenced. Legend: DONE / SUBSTANTIALLY (mechanism done, one proof deferr
 | P4 Beta hardening | DONE | 191 rollout safety; 192 status/underProvisioned; audit cols 185+187; 193 health/readyz/metrics (orch/health.nova) | -- (Beta line complete) |
 | P5 Bounded RPO (quorum-ack) | DONE | btree DurableReplicator live-wired into executor commit; "SET DURABLE COMMIT" flag; 2 real-socket tests (RPO=0 + no-quorum-fails); SqlConfigStore.setDurable opt-in | -- |
 | P6 Security (authn/authz + mTLS) | DONE (btree tier) | (1) REPLICA AUTHZ: HMAC challenge-response (wrong/missing key refused before any frame). (2) CONFIG-API RBAC: executor enforces users/roles/per-object perms + no-token rejection + adminGate on the control commands. (3) MUTUAL TLS: replication stream wrapped in TLS 1.3 with client-cert verify against a shared CA (valid chain ships, rogue-CA client refused). btree 37/37 | driver follow-on only: thread login/token through the Nova db.Connection seam so the store authenticates (enforcement already exists) |
-| P7 Operability (backup/PITR, upgrade, runbooks) | PARTIAL | backup/restore DONE (exportSnapshot + restoreSnapshot, byte-for-byte + MVCC-visible); PITR DONE (recoverTo(target) + openAt; test "P7 PITR" replays archived WAL forward to a target seq, excludes later commits). btree 40/40 | rolling upgrade w/ rollback; membership add/remove; runbook per failure mode |
+| P7 Operability (backup/PITR, upgrade, runbooks) | PARTIAL | backup/restore DONE (exportSnapshot + restoreSnapshot, byte-for-byte + MVCC-visible); PITR DONE (recoverTo(target) + openAt); RUNBOOKS DONE (docs/runbooks.md: 10 failure modes, each tied to a real mechanism, incl. manual rolling-upgrade + membership procedures). btree 40/40 | AUTOMATED rolling upgrade + membership (live-node orchestration; manual procedures documented) |
 | P8 Chaos + soak (RPO/RTO proof) | PARTIAL | chaos_suite.sh: kill-leader-after-load + kill-leader-mid-write 2/2 PASS; in-process: corrupt-frame-rejected (NEW), fenced-old-leader, follower-reship-after-crash, CLOCK-SKEW fencing safety (NEW, test 188). STATED RPO=0 (sync/quorum), RTO=lease TTL + tick | subprocess kill-follower-mid-apply + partition live harness; disk-full injection; multi-hour soak in CI |
 
 Beta line (P0-P4): substantially complete -- only P4 endpoint/metrics + P0 formal close-out remain.
@@ -381,8 +381,12 @@ write volume ever demands multi-writer, which it will not).
   the published bound (P8 gate).
 - SECURITY: authn + authz on the config API; mutually-authenticated TLS on replication and client hops; no
   unauthenticated writer, no plaintext frames (P6 gate).
-- OPERABILITY: backup + point-in-time restore verified (P7); rolling upgrade with rollback keeps reconcile
-  continuous (P7); a runbook exists for each failure mode in the risk register (section 7).
+- OPERABILITY: backup + point-in-time restore verified (P7; exportSnapshot/restoreSnapshot + recoverTo/openAt,
+  btree 40/40); rolling upgrade with rollback keeps reconcile continuous (P7; MANUAL procedure documented,
+  automation pending); a runbook exists for each failure mode in the risk register (section 7). DONE: see
+  docs/runbooks.md -- 10 runbooks (failover, split-brain confirm, replication lag, store outage, clock skew,
+  backup/restore, PITR, rolling upgrade, membership add/remove, detected corruption), each tied to a real
+  mechanism + the /metrics signals to watch.
 - PROVEN, NOT ASSERTED: the chaos + soak suite (P8) runs in CI or on a schedule and reports RPO/RTO/no-loss
   /no-split-brain as numbers. A claim without a passing fault-injection test does not count.
 
