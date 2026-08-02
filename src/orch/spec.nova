@@ -86,6 +86,31 @@ pub fn parseSpec(text: string): Spec {
     return s;
 }
 
+// Validate a PARSED spec before the reconcile loop is allowed to apply it (P4 rollout safety). parseSpec
+// is lenient (missing fields take defaults, replicas is clamped to >=1), so a syntactically valid JSON can
+// still describe a workload that must never be started or, worse, must never REPLACE a healthy one. Returns
+// "" when the spec is safe to apply, else a human-readable reason. The reconcile path treats a non-empty
+// reason exactly like an unreadable manifest: keep the last-good workload running, do not tear it down.
+pub fn validateSpec(s: Spec): string {
+    if (string.eql(s.name, "")) { return "empty name"; }
+    if (string.eql(s.binaryPath, "")) { return "empty binaryPath"; }
+    if (s.replicas < 1) { return "replicas must be >= 1"; }
+    if (!string.eql(s.restartPolicy, "always")
+        && !string.eql(s.restartPolicy, "on-failure")
+        && !string.eql(s.restartPolicy, "never")) {
+        return "unknown restartPolicy '" + s.restartPolicy + "'";
+    }
+    if (s.isolationLevel != 0 && s.isolationLevel != 1 && s.isolationLevel != 3) {
+        return "isolationLevel must be 0, 1, or 3";
+    }
+    if (s.cpuMilli < 0) { return "cpuMilli must be >= 0"; }
+    if (s.memMaxBytes < 0) { return "memMaxBytes must be >= 0"; }
+    if (s.pidsMax < 0) { return "pidsMax must be >= 0"; }
+    if (s.probePort < 0) { return "probePort must be >= 0"; }
+    if (s.probePort > 0 && s.probePeriodMs < 1) { return "probePeriodMs must be >= 1 when a probe is set"; }
+    return "";
+}
+
 // Two specs are "the same workload" (no restart needed) when the run-affecting fields all match. The
 // name is the key, so it's assumed equal. Mirrors the PoC's specsEqual, extended with replicas + probe.
 pub fn specsEqual(a: Spec, b: Spec): bool {

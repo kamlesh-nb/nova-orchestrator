@@ -211,6 +211,21 @@ the store), not the source of truth.
   -promotion) and P5's executor per-write durable flag.
 - P4 Beta line (section 6 checklist). This is the "honest Beta" cut point: ship internally here if needed.
   Gate: the Beta definition-of-done met. Everything below is what makes it PRODUCTION grade.
+  STATUS (2026-08-03): the store-driven / HA-fenced / crash-safe Beta items are DONE via P1-P3 (desired
+  state from the store; fenced promotion; reconcile re-derives from the store on restart; config is
+  revisioned). Two more Beta-line items landed this session:
+    * ROLLOUT SAFETY: spec.validateSpec gates every apply (empty binaryPath, unknown restartPolicy, bad
+      isolationLevel, negative limits, probe without a period). reconcileFromEntries + scan() now
+      parse-THEN-validate, so a spec that parses but is semantically bad is treated like an unreadable
+      manifest: the last-good workload keeps running (never replaced by a broken spec) and a brand-new bad
+      workload is never started. Test 191 (validateSpec rules + bad-update-keeps-last-good + bad-new-not
+      -started).
+    * OBSERVABILITY: Nativelet.status() returns a per-workload WorkloadStatus{name,desired,running,restarts}
+      snapshot; underProvisioned() is the single "are we converged?" gauge (count of workloads with running
+      < desired); totalRunning() already existed. Scrape each tick for a /metrics line. Test 192.
+  REMAINING Beta-line items (section 6a): an orchestrator self-health/readiness endpoint (distinct from
+  workload probes); who/when audit columns on the config row; and replication-lag as a scraped metric
+  (leader LSN minus follower confirmed-seq -- needs a small btree read-out). Offline suite 13/13, live 3/3.
 - P5 Bounded durability on failover (RPO): make the config write path either sync-replicate to a quorum
   before ack (writer waits for N/2+1 followers' confirmed-seq to cover the frame) OR expose a per-write
   "durable" flag that does so. State the RPO explicitly (RPO=0 for durable writes; bounded lag for async).
@@ -294,9 +309,11 @@ write volume ever demands multi-writer, which it will not).
   never double-starts or orphans a workload.
 - Health/readiness of the orchestrator itself is exposed (an endpoint), separate from workload probes.
 - Rollout safety: a bad spec update does not take down healthy replicas (validate before apply; keep the
-  last-good revision).
+  last-good revision). DONE (2026-08-03): spec.validateSpec + parse-then-validate in reconcile (test 191).
 - Observability: structured logs + basic metrics (reconcile latency, replica count vs desired, restart
-  counts, leader identity, replication lag = leader LSN minus follower confirmed seq).
+  counts, leader identity, replication lag = leader LSN minus follower confirmed seq). PARTIAL (2026-08-03):
+  Nativelet.status()/underProvisioned()/totalRunning() give replica-count-vs-desired + restart counts (test
+  192); leader identity is on the lease row; reconcile latency + replication-lag metric still to wire.
 - Bounded blast radius: resource limits + isolation already exist (I4); confirm they are enforced on the
   store-driven path.
 
