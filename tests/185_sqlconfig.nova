@@ -126,6 +126,9 @@ struct FakeConn impl Connection {
     pub async fn prepare(self: FakeConn, sql: string): int { return 0; }
     pub async fn queryPrepared(self: FakeConn, stmt: int, params: List<DbValue>): ResultSet { return ResultSet(); }
     pub async fn execPrepared(self: FakeConn, stmt: int, params: List<DbValue>): ExecResult { return ExecResult(0, ""); }
+    pub async fn begin(self: FakeConn): ExecResult { return ExecResult(0, ""); }
+    pub async fn commit(self: FakeConn): ExecResult { return ExecResult(0, ""); }
+    pub async fn rollback(self: FakeConn): ExecResult { return ExecResult(0, ""); }
 }
 
 @test
