@@ -9,13 +9,13 @@
 //     of the pool; a drained slot's `up=0` already excludes it from every LB strategy (see net/proxy).
 //
 // Standalone driver shape (proxy + autoscaler under one block-drive):
-//   asyncio.holdReactors();
+//   aio.holdReactors();
 //   let a = autoscale.Autoscaler(pool, "/path/backend", "127.0.0.1", 9101, 1, 8);
 //   a.pid.setOutputLimits(1.0, 8.0);
 //   let _ = autoscale.runWithProxy(a, 9100, 3000, 500);   // 500ms control interval
 
 import net.proxy;
-import net.asyncio;
+import net.aio;
 import process;
 import list;
 import math;
@@ -184,7 +184,7 @@ pub struct Autoscaler {
 pub async fn autoscaleLoop(a: Autoscaler, intervalMs: int): int {
     let dt = (intervalMs as double) / 1000.0;
     while (true) {
-        let _ = await asyncio.sleep(intervalMs);
+        let _ = await aio.sleep(intervalMs);
         a.tick(dt);
     }
     return 0;
@@ -192,10 +192,10 @@ pub async fn autoscaleLoop(a: Autoscaler, intervalMs: int): int {
 
 // Run the proxy and the autoscaler together under a single block-drive: spawn the control loop on reactor
 // 0, then serve the front port with the share-nothing accept fan-out. Caller must have called
-// asyncio.holdReactors() first (so the fan-out lands on live reactors), exactly like Proxy.run.
+// aio.holdReactors() first (so the fan-out lands on live reactors), exactly like Proxy.run.
 pub async fn runWithProxy(a: Autoscaler, port: int, tmo: int, intervalMs: int): int {
     a.start();                                 // spawn the minimum replicas
-    asyncio.pinNextCoro(0);
+    aio.pinNextCoro(0);
     spawn autoscaleLoop(a, intervalMs);
     return await proxy.serve(a.pool, port, tmo);
 }

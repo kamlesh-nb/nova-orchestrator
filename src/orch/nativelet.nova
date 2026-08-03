@@ -15,7 +15,7 @@ import io.file;
 import bytes;
 import list;
 import string;
-import net.asyncio;
+import net.aio;
 import store.config;
 
 // How many consecutive failed HTTP probes drain a workload's patience before it is restarted.
@@ -306,14 +306,14 @@ pub struct Nativelet {
 // One-shot async HTTP GET liveness probe: connect, send GET, read the status line, accept 2xx/3xx.
 // Any connect/read failure or a >=400 status is unhealthy. Fully non-blocking.
 async fn httpProbe(host: string, port: int, path: string, tmo: int): bool {
-    let s = await asyncio.asyncConnect(host, port);
+    let s = await aio.asyncConnect(host, port);
     if (s.sock == 0) { return false; }
     let req = `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`;
-    let _ = await asyncio.async_write(s.sock, req);
+    let _ = await aio.async_write(s.sock, req);
     let cap = 512;
     let buf = bytes.alloc(cap);
-    let n = await asyncio.async_read_deadline(s.sock, buf, cap, tmo);
-    asyncio.aclose(s.sock);
+    let n = await aio.async_read_deadline(s.sock, buf, cap, tmo);
+    aio.aclose(s.sock);
     if (n <= 12) { bytes.free(buf); return false; }   // need at least "HTTP/1.1 xxx"
     // status code is the 3 bytes after the first space (offset 9 in "HTTP/1.1 200")
     let c0 = bytes.read_byte(buf, 9);
@@ -336,7 +336,7 @@ pub async fn run(n: Nativelet, intervalMs: int): int {
     while (true) {
         n.reconcile();
         let _ = await n.probeAndHeal();
-        let _ = await asyncio.sleep(intervalMs);
+        let _ = await aio.sleep(intervalMs);
     }
     return 0;
 }

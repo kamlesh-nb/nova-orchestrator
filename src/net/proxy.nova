@@ -7,7 +7,7 @@
 //
 // This is the SPINE the rest of I1 hangs off: health checks, least-conn/weighted LB, and the PID
 // autoscaler (which spawns/kills backends via R1) layer on top of the same Pool + handler.
-import net.asyncio;
+import net.aio;
 import string;
 import list;
 import bytes;
@@ -419,7 +419,7 @@ async fn readMessage(sock: long, isResponse: bool, tmo: int): HttpMsg {
     let hdrEnd = findHeaderEnd(buf, len);
     while (hdrEnd == -1) {
         if (len >= cap) { bytes.free(buf); return HttpMsg("", false, true); }
-        let n = await asyncio.async_read_deadline(sock, buf + len, cap - len, tmo);
+        let n = await aio.async_read_deadline(sock, buf + len, cap - len, tmo);
         if (n <= 0) { bytes.free(buf); return HttpMsg("", false, true); }
         len = len + n;
         hdrEnd = findHeaderEnd(buf, len);
@@ -434,7 +434,7 @@ async fn readMessage(sock: long, isResponse: bool, tmo: int): HttpMsg {
         let cend = chunkedEnd(buf, bodyStart, len);
         while (cend == -1) {
             if (len >= cap) { framed = false; break; }
-            let n = await asyncio.async_read_deadline(sock, buf + len, cap - len, tmo);
+            let n = await aio.async_read_deadline(sock, buf + len, cap - len, tmo);
             if (n <= 0) { framed = false; break; }
             len = len + n;
             cend = chunkedEnd(buf, bodyStart, len);
@@ -445,7 +445,7 @@ async fn readMessage(sock: long, isResponse: bool, tmo: int): HttpMsg {
         if (need >= 0) {
             while (len - bodyStart < need) {
                 if (len >= cap) { framed = false; break; }
-                let n = await asyncio.async_read_deadline(sock, buf + len, cap - len, tmo);
+                let n = await aio.async_read_deadline(sock, buf + len, cap - len, tmo);
                 if (n <= 0) { framed = false; break; }
                 len = len + n;
             }
@@ -456,7 +456,7 @@ async fn readMessage(sock: long, isResponse: bool, tmo: int): HttpMsg {
             // connection. Read to EOF; the connection is consumed, so it is NOT reusable.
             framed = false;
             while (len < cap) {
-                let n = await asyncio.async_read_deadline(sock, buf + len, cap - len, tmo);
+                let n = await aio.async_read_deadline(sock, buf + len, cap - len, tmo);
                 if (n <= 0) { break; }
                 len = len + n;
             }
@@ -489,7 +489,7 @@ async fn acquire(b: Backend): (long, bool) {
         lst.remove(n - 1);
     }
     if (sock != 0) { return (sock, true); }   // warm reuse — no handshake, no resolve
-    let s = await asyncio.asyncConnect(b.host, b.port);
+    let s = await aio.asyncConnect(b.host, b.port);
     return (s.sock, false);                    // 0 on failure
 }
 
@@ -505,11 +505,11 @@ async fn acquire(b: Backend): (long, bool) {
 // nginx model) — or lift this once the runtime can detach/reattach a socket from its coroutine.
 fn release(b: Backend, sock: long, reusable: bool): void {
     if (sock == 0) { return; }
-    if (!reusable || !b.reuse) { asyncio.aclose(sock); return; }
+    if (!reusable || !b.reuse) { aio.aclose(sock); return; }
     let t = nova_thread_id() as int;
     let lst = b.idle.get(t) ?? List<long>();
     if (lst.size() < 256) { lst.push(sock); }
-    else { asyncio.aclose(sock); }
+    else { aio.aclose(sock); }
 }
 
 // ---------------------------------------------------------------------------
@@ -528,15 +528,15 @@ async fn forward(b: Backend, reqBytes: string, reqWantClose: bool, tmo: int): st
     let (bsock, reused) = await acquire(b);
     if (bsock == 0) { return ""; }
 
-    let _ = await asyncio.async_write(bsock, reqBytes);
+    let _ = await aio.async_write(bsock, reqBytes);
     let resp = await readMessage(bsock, true, tmo);
 
     if (string.eql(resp.bytes, "") && reused) {
-        asyncio.aclose(bsock);
-        let fresh = await asyncio.asyncConnect(b.host, b.port);
+        aio.aclose(bsock);
+        let fresh = await aio.asyncConnect(b.host, b.port);
         bsock = fresh.sock;
         if (bsock == 0) { return ""; }
-        let _ = await asyncio.async_write(bsock, reqBytes);
+        let _ = await aio.async_write(bsock, reqBytes);
         resp = await readMessage(bsock, true, tmo);
     }
 
@@ -562,7 +562,7 @@ async fn handleClient(pool: Pool, clientSock: long, tmo: int): int {
 
         let b = pool.select(reqKey(req.bytes));   // key used only by ConsistentHash; others ignore it
         if (b.port == 0) {
-            let _ = await asyncio.async_write(clientSock, errorResponse(502, "Bad Gateway", "no backends"));
+            let _ = await aio.async_write(clientSock, errorResponse(502, "Bad Gateway", "no backends"));
             alive = false;
             break;
         }
@@ -571,14 +571,14 @@ async fn handleClient(pool: Pool, clientSock: long, tmo: int): int {
         let resp = await forward(b, req.bytes, req.wantClose, tmo);
         b.releaseConn();
         if (string.eql(resp, "")) {
-            let _ = await asyncio.async_write(clientSock, errorResponse(502, "Bad Gateway", "upstream error"));
+            let _ = await aio.async_write(clientSock, errorResponse(502, "Bad Gateway", "upstream error"));
             alive = false;
             break;
         }
-        let _ = await asyncio.async_write(clientSock, resp);
+        let _ = await aio.async_write(clientSock, resp);
         if (req.wantClose) { alive = false; }
     }
-    asyncio.aclose(clientSock);
+    aio.aclose(clientSock);
     return 0;
 }
 
@@ -602,16 +602,16 @@ fn healthyStatus(raw: string): bool {
 // GET of `path` whose 2xx/3xx status proves the app is serving. Fully non-blocking (parks the checker
 // coroutine, never a thread). Returns whether the probe succeeded.
 async fn probeBackend(b: Backend, timeoutMs: int, path: string): bool {
-    let s = await asyncio.asyncConnect(b.host, b.port);
+    let s = await aio.asyncConnect(b.host, b.port);
     if (s.sock == 0) { return false; }
     if (string.len(path) == 0) {
-        asyncio.aclose(s.sock);
+        aio.aclose(s.sock);
         return true;                           // TCP connect succeeded
     }
     let req = `GET ${path} HTTP/1.1\r\nHost: ${b.host}\r\nConnection: close\r\n\r\n`;
-    let _ = await asyncio.async_write(s.sock, req);
+    let _ = await aio.async_write(s.sock, req);
     let resp = await readMessage(s.sock, true, timeoutMs);
-    asyncio.aclose(s.sock);
+    aio.aclose(s.sock);
     if (string.eql(resp.bytes, "")) { return false; }
     return healthyStatus(resp.bytes);
 }
@@ -630,7 +630,7 @@ async fn healthCheckLoop(pool: Pool): int {
             b.observe(ok, pool.hcRise, pool.hcFall);
             i = i + 1;
         }
-        let _ = await asyncio.sleep(pool.hcIntervalMs);
+        let _ = await aio.sleep(pool.hcIntervalMs);
     }
     return 0;
 }
@@ -640,13 +640,13 @@ async fn healthCheckLoop(pool: Pool): int {
 // acquired/pooled/reused on the same reactor's per-reactor idle list (safe, lock-free).
 async fn proxyAcceptLoop(pool: Pool, host: string, port: int, tmo: int): int {
     // Empty host ⇒ INADDR_ANY (ordinary proxy); a non-empty host binds a specific Service VIP (I3).
-    let srv = if (string.eql(host, "")) asyncio.serverListen(port) else asyncio.serverListenAddr(host, port);
+    let srv = if (string.eql(host, "")) aio.serverListen(port) else aio.serverListenAddr(host, port);
     if (srv == 0) {
         console.log("proxy: failed to bind front port (in use?)");
         return -1;
     }
     while (true) {
-        let client = await asyncio.aaccept(srv);
+        let client = await aio.aaccept(srv);
         spawn handleClient(pool, client, tmo);
     }
     return 0;
@@ -657,13 +657,13 @@ async fn proxyAcceptLoop(pool: Pool, host: string, port: int, tmo: int): int {
 async fn runProxy(pool: Pool, host: string, port: int, tmo: int): int {
     // One health-check sweep coroutine on reactor 0 (the single writer of every backend's `up`).
     if (pool.hcEnabled) {
-        asyncio.pinNextCoro(0);
+        aio.pinNextCoro(0);
         spawn healthCheckLoop(pool);
     }
-    let n = asyncio.reactorCount();
+    let n = aio.reactorCount();
     let i = 1;
     while (i < n) {
-        asyncio.pinNextCoro(i);
+        aio.pinNextCoro(i);
         spawn proxyAcceptLoop(pool, host, port, tmo);
         i = i + 1;
     }
@@ -695,7 +695,7 @@ pub struct Proxy {
     // Bind the front port and serve forever. holdReactors keeps all reactors alive BEFORE the block-drive
     // so the per-reactor accept fan-out lands on live reactors (share-nothing, like App.run).
     pub fn run(self: Proxy): void {
-        asyncio.holdReactors();
+        aio.holdReactors();
         let _ = runProxy(self.pool, "", self.port, self.timeoutMs);
     }
 }

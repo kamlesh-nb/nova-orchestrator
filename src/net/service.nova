@@ -15,7 +15,7 @@
 //   let ep = reg.resolve("api");                          // "127.0.0.1:8080" — hand to callers
 
 import net.proxy;
-import net.asyncio;
+import net.aio;
 import io.file;
 import list;
 import string;
