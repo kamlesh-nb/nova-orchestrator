@@ -42,6 +42,12 @@ pub struct Spec {
     // (replica i takes a free slot from there). No-op off Linux — the caller uses fd-handoff instead.
     pub netns: bool,
     pub netnsBase: int,
+    // fd-passing handoff (the default data path): each replica is spawned with NOVA_HANDOFF_SOCK set to
+    // `handoffSock`, so it connects to the service's AF_UNIX rendezvous and receives client sockets there
+    // instead of binding a TCP port. Mutually exclusive with netns / a host port (a handoff app has no
+    // listening socket). The service for this workload binds the SAME rendezvous path.
+    pub handoff: bool,
+    pub handoffSock: string,
     init(name: string, binaryPath: string) {
         self.name = name;
         self.binaryPath = binaryPath;
@@ -60,6 +66,8 @@ pub struct Spec {
         self.portFlag = "";
         self.netns = false;
         self.netnsBase = 0;
+        self.handoff = false;
+        self.handoffSock = "";
     }
 }
 

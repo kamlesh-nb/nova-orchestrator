@@ -14,6 +14,7 @@ import orch.spec;
 import orch.isolation;
 import os.sandbox;
 import net.netns;
+import env;
 
 pub struct Supervisor {
     pub spec: spec.Spec,
@@ -88,6 +89,23 @@ pub struct Supervisor {
             return;
         }
         if (!self.manageProcesses) { return; }
+
+        // fd-passing handoff (the default): spawn the replica with NOVA_HANDOFF_SOCK set to the workload's
+        // rendezvous, so app.run connects to the service and receives client sockets there instead of
+        // binding a TCP port. The env var is set immediately before the (synchronous) spawn — the child
+        // captures it at exec — then cleared so a later non-handoff spawn does not inherit it.
+        if (self.spec.handoff) {
+            let hargs = list.List<string>();
+            let k = 0;
+            while (k < self.spec.args.size()) { hargs.push(self.spec.args.get(k) ?? ""); k = k + 1; }
+            env.set("NOVA_HANDOFF_SOCK", self.spec.handoffSock);
+            let hp = process.Process.spawn(self.spec.binaryPath, hargs);
+            env.set("NOVA_HANDOFF_SOCK", "");
+            let _ = isolation.applyLimits(self.spec, hp.pid());
+            self.procs.push(hp);
+            self.ports.push(-1);            // no host port in handoff mode
+            return;
+        }
 
         // netns isolation (Linux gateway-only): each replica runs in its own network namespace behind a
         // veth pair and binds the SAME basePort on its private address, so replicas need no distinct host
@@ -278,6 +296,9 @@ pub struct Supervisor {
     // The service endpoints this workload ADVERTISES on `host` -- the desired topology (pure; see
     // spec.serviceEndpoints). orchd publishes these to the discovery file; service health-checks liveness.
     pub fn advertisedEndpoints(self: Supervisor, host: string): list.List<string> {
+        // Handoff mode: nothing to advertise — the service reaches the apps over the AF_UNIX rendezvous
+        // (they register by connecting to it), not via host:port discovery.
+        if (self.spec.handoff) { return list.List<string>(); }
         // netns mode: each replica is reachable at its PRIVATE veth address (10.66.<slot>.2) on basePort,
         // regardless of `host` — the gateway is on the same node and forwards to those addresses.
         if (self.spec.netns) {

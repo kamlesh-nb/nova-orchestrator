@@ -213,13 +213,23 @@ pub fn toSpec(m: Manifest): spec.Spec {
     s.pidsMax = m.resources.pidsMax;
     s.probePath = m.health.path;
     s.probePeriodMs = if (m.health.intervalMs > 0) m.health.intervalMs else 2000;
-    let mode = isolationMode(m);
-    if (string.eql(mode, "public") && m.network.portBase > 0) {
-        // Directly exposed: each replica binds a DISTINCT host port [portBase, ...].
+    // Precedence: an explicitly PUBLIC app keeps its host port; otherwise (gateway-only) fd-passing
+    // handoff is the default data path (no listening port — the app receives client sockets over the
+    // service's AF_UNIX rendezvous, whose path is derived from the workload name so service + apps
+    // agree); netns is the gateway-only path only when handoff is explicitly turned off (Linux).
+    if (string.eql(m.network.expose, "public") && m.network.portBase > 0) {
         s.basePort = m.network.portBase;
         s.portFlag = m.network.portFlag;
         s.probePort = m.network.portBase;
-    } else if (string.eql(mode, "netns")) {
+        return s;
+    }
+    if (m.lb.handoff) {
+        s.handoff = true;
+        s.handoffSock = `/tmp/nova-${m.metadata.name}.sock`;
+        return s;
+    }
+    let mode = isolationMode(m);
+    if (string.eql(mode, "netns")) {
         // Linux gateway-only: each replica runs in its own netns and binds the SAME port on its private
         // address; the supervisor advertises the private addresses. Port defaults to 8080 if unset.
         s.netns = true;

@@ -39,19 +39,38 @@ fn test_toSpec_maps_manifest_fields(): void {
 }
 
 @test
-fn test_gateway_only_is_not_exposed(): void {
-    // A gateway-only app (default) is never exposed on a HOST port — reached via the gateway. The
-    // mechanism is platform-selected: fd-handoff (mac/win) => no port at all; netns (Linux) => the app
-    // binds a port on its PRIVATE veth address, so basePort is set but it is not a host port.
+fn test_gateway_only_defaults_to_handoff(): void {
+    // A default gateway-only app (lb.handoff defaults true) uses fd-handoff: no host port, no netns; the
+    // supervisor spawns each replica with NOVA_HANDOFF_SOCK = the workload's rendezvous.
     let m = manifest.parseManifest("metadata:\n  name: api\nworkload:\n  binary: /bin/api\nreplicas:\n  min: 2\n  max: 4\n");
     let s = manifest.toSpec(m);
     assert.equalInt(s.replicas, 2);
-    if (string.eql(manifest.isolationMode(m), "netns")) {
-        assert.isTrue(s.netns);                     // Linux: private-netns port, advertised as a netns IP
-    } else {
-        assert.equalInt(s.basePort, 0);             // mac/win handoff: no port at all
-        assert.isTrue(!s.netns);
-    }
+    assert.isTrue(s.handoff);
+    assert.equalStr(s.handoffSock, "/tmp/nova-api.sock");
+    assert.equalInt(s.basePort, 0);                 // no host port
+    assert.isTrue(!s.netns);
+}
+
+@test
+fn test_handoff_off_uses_netns_or_loopback(): void {
+    // Explicitly turning handoff off is what selects the netns/loopback path for a gateway-only app.
+    let m = manifest.parseManifest("metadata:\n  name: api\nworkload:\n  binary: /bin/api\nlb:\n  handoff: false\n");
+    let s = manifest.toSpec(m);
+    assert.isTrue(!s.handoff);
+    if (string.eql(manifest.isolationMode(m), "netns")) { assert.isTrue(s.netns); }
+    else { assert.isTrue(!s.netns); }
+}
+
+@test
+fn test_supervisor_handoff_advertises_nothing(): void {
+    // A handoff workload advertises no endpoints (apps register over the rendezvous, not host:port).
+    let s = manifest.toSpec(manifest.parseManifest("metadata:\n  name: shop\nworkload:\n  binary: /bin/shop\nreplicas:\n  min: 3\n  max: 5\n"));
+    assert.isTrue(s.handoff);
+    let sup = supervisor.Supervisor(s);
+    sup.simulated = true;
+    sup.start();
+    assert.equalInt(sup.running(), 3);                          // sim keeps replicas.min
+    assert.equalInt(sup.advertisedEndpoints("host").size(), 0); // handoff => nothing advertised
 }
 
 @test
