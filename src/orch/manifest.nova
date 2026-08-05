@@ -28,6 +28,8 @@ import list;
 import orch.spec;
 import net.proxy;
 import net.autoscale;
+import net.netns;
+import platform;
 
 @serializable
 struct Metadata {
@@ -217,6 +219,27 @@ pub fn toSpec(m: Manifest): spec.Spec {
         s.probePort = m.network.portBase;
     }
     return s;
+}
+
+// Which isolation mechanism a gateway-only app uses on THIS host. The manifest declares the INTENT
+// (network.expose = gateway-only); the platform picks the implementation, the same way the reactor
+// backend is picked per OS:
+//   "handoff" — macOS/Windows: the app receives client sockets over the gateway's AF_UNIX rendezvous
+//               and has no listening TCP port (fd-passing).
+//   "netns"   — Linux with netns available: the app runs in its own network namespace behind a veth
+//               pair, reachable only at its private address (see net/netns).
+//   "loopback"— gateway-only but netns unavailable on Linux (no root/ip): bind loopback only, best effort.
+//   "public"  — network.expose = public: the app binds a host port directly (dev convenience).
+pub fn isolationMode(m: Manifest): string {
+    if (string.eql(m.network.expose, "public")) { return "public"; }
+    if (platform.isLinux) { return if (netns.available()) "netns" else "loopback"; }
+    return "handoff";
+}
+
+// The Linux network plan for a gateway-only app at replica slot `idx` (its private /30 + veth names).
+// Only meaningful when isolationMode(m) == "netns".
+pub fn netPlanFor(m: Manifest, idx: int): netns.NetPlan {
+    return netns.plan(m.metadata.name, idx);
 }
 
 // Build the load-balancer Pool the gateway fronts this app with, straight from the manifest: the LB
