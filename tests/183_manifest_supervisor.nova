@@ -62,6 +62,21 @@ fn test_handoff_off_uses_netns_or_loopback(): void {
 }
 
 @test
+fn test_service_spec_for_handoff_workload(): void {
+    // The service (gateway) Spec orchd launches for a handoff workload: the service binary, one replica,
+    // handoff on the SAME rendezvous as the apps, listening on the front port.
+    let m = manifest.parseManifest("metadata:\n  name: shop\nworkload:\n  binary: /bin/shop\nnetwork:\n  servicePort: 8140\n");
+    let s = manifest.serviceSpecFor(m, "/opt/nova/bin/service");
+    assert.equalStr(s.name, "shop-svc");
+    assert.equalStr(s.binaryPath, "/opt/nova/bin/service");
+    assert.equalInt(s.replicas, 1);
+    assert.isTrue(s.handoff);
+    assert.equalStr(s.handoffSock, "/tmp/nova-shop.sock");   // matches toSpec(app).handoffSock
+    assert.equalStr(manifest.toSpec(m).handoffSock, "/tmp/nova-shop.sock");
+    assert.equalInt(s.basePort, 8140);                        // supervisor sets NOVA_PORT from this
+}
+
+@test
 fn test_supervisor_handoff_advertises_nothing(): void {
     // A handoff workload advertises no endpoints (apps register over the rendezvous, not host:port).
     let s = manifest.toSpec(manifest.parseManifest("metadata:\n  name: shop\nworkload:\n  binary: /bin/shop\nreplicas:\n  min: 3\n  max: 5\n"));

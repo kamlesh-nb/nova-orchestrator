@@ -118,7 +118,10 @@ struct Network {
     // (handoff apps have no listening port). portBase 0 = not directly exposed.
     pub portBase: int,
     pub portFlag: string,
-    init() { self.expose = "gateway-only"; self.portBase = 0; self.portFlag = ""; }
+    // The public front port the workload's SERVICE (gateway) listens on. Clients hit this; the service
+    // hands connections to the app replicas (handoff) or forwards to them. Default 8080.
+    pub servicePort: int,
+    init() { self.expose = "gateway-only"; self.portBase = 0; self.portFlag = ""; self.servicePort = 8080; }
 }
 
 // cgroups-v2 resource limits (Linux; 0 = unset). cpuMilli is milli-CPU (500 = 0.5 core).
@@ -238,6 +241,22 @@ pub fn toSpec(m: Manifest): spec.Spec {
         s.probePort = s.basePort;
     }
     // handoff (mac/win) and loopback leave basePort 0 — the app is reached via the gateway, not a port.
+    return s;
+}
+
+// The Spec for the workload's SERVICE (gateway) process — the data-plane side orchd launches alongside
+// the app replicas. It runs the `service` binary at `servicePath` in fd-handoff mode on the SAME
+// rendezvous the apps connect to (/tmp/nova-<name>.sock), listening on network.servicePort. Run it via a
+// supervisor exactly like an app: the handoff Spec makes the supervisor set NOVA_HANDOFF_SOCK + NOVA_PORT
+// for the service child. Only meaningful when the workload is handoff (lb.handoff); returns a service
+// Spec regardless, so the caller gates on toSpec(m).handoff.
+pub fn serviceSpecFor(m: Manifest, servicePath: string): spec.Spec {
+    let s = spec.Spec(m.metadata.name + "-svc", servicePath);
+    s.replicas = 1;
+    s.restartPolicy = "always";
+    s.handoff = true;
+    s.handoffSock = `/tmp/nova-${m.metadata.name}.sock`;
+    s.basePort = if (m.network.servicePort > 0) m.network.servicePort else 8080;
     return s;
 }
 

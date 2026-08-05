@@ -99,11 +99,15 @@ pub struct Supervisor {
             let k = 0;
             while (k < self.spec.args.size()) { hargs.push(self.spec.args.get(k) ?? ""); k = k + 1; }
             env.set("NOVA_HANDOFF_SOCK", self.spec.handoffSock);
+            // basePort>0 marks the SERVICE (gateway) process: it needs its public front port too. An APP
+            // replica has basePort 0 (no port — it only receives handed-off sockets).
+            if (self.spec.basePort > 0) { env.set("NOVA_PORT", `${self.spec.basePort}`); }
             let hp = process.Process.spawn(self.spec.binaryPath, hargs);
             env.set("NOVA_HANDOFF_SOCK", "");
+            if (self.spec.basePort > 0) { env.set("NOVA_PORT", ""); }
             let _ = isolation.applyLimits(self.spec, hp.pid());
             self.procs.push(hp);
-            self.ports.push(-1);            // no host port in handoff mode
+            self.ports.push(self.spec.basePort);   // the service's front port (-1/0 for an app)
             return;
         }
 
