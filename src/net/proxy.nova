@@ -29,6 +29,14 @@ pub enum LbStrategy {
     ConsistentHash,
 }
 
+// Map a strategy NAME (as it appears in config / a manifest) to the enum. Unknown => RoundRobin.
+pub fn strategyFromName(s: string): LbStrategy {
+    if (string.eql(s, "weighted")) { return LbStrategy.Weighted; }
+    if (string.eql(s, "leastconn")) { return LbStrategy.LeastConn; }
+    if (string.eql(s, "consistenthash")) { return LbStrategy.ConsistentHash; }
+    return LbStrategy.RoundRobin;
+}
+
 // Non-negative 31-bit hash of a string (string.hash may be negative; mask the sign bit).
 fn hashKey(s: string): int {
     return string.hash(s) & 2147483647;

@@ -26,6 +26,8 @@ import io.file;
 import string;
 import list;
 import orch.spec;
+import net.proxy;
+import net.autoscale;
 
 @serializable
 struct Metadata {
@@ -215,4 +217,27 @@ pub fn toSpec(m: Manifest): spec.Spec {
         s.probePort = m.network.portBase;
     }
     return s;
+}
+
+// Build the load-balancer Pool the gateway fronts this app with, straight from the manifest: the LB
+// strategy and the active health-check policy. Backends are added by autoscalerFrom (which pre-registers
+// the replica slots) or by service discovery — poolFrom only sets policy.
+pub fn poolFrom(m: Manifest): proxy.Pool {
+    let p = proxy.Pool();
+    p.setStrategy(proxy.strategyFromName(m.lb.strategy));
+    p.setHealthPath(m.health.path);
+    p.enableHealthChecks(m.health.intervalMs, m.health.timeoutMs, m.health.rise, m.health.fall);
+    return p;
+}
+
+// Build the control-plane autoscaler for this app over `pool`: the replica band [replicas.min,
+// replicas.max], the process command, the advertise host, and the exposure base port; then load the PID
+// gains and setpoint from autoscale.*. The Autoscaler constructor pre-registers replicas.max drained
+// pool slots (host:portBase+i), so after this the pool knows every slot the controller can scale into.
+// The caller runs the control loop only when m.autoscale.enabled (min == max otherwise pins the count).
+pub fn autoscalerFrom(m: Manifest, pool: proxy.Pool, host: string): autoscale.Autoscaler {
+    let base = if (m.network.portBase > 0) m.network.portBase else 0;
+    let a = autoscale.Autoscaler(pool, m.workload.binary, host, base, m.replicas.min, m.replicas.max);
+    a.configure(m.autoscale.kp, m.autoscale.ki, m.autoscale.kd, m.autoscale.setpoint);
+    return a;
 }
