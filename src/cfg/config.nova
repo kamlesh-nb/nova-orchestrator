@@ -159,6 +159,60 @@ pub fn knownStrategy(s: string): bool {
         || string.eql(s, "leastconn") || string.eql(s, "consistenthash");
 }
 
+// ---- orchd config store (O4): authenticated + optionally TLS-encrypted connection to btree ----
+
+// How orchd's SqlConfigStore connects to BTreeDB. The credentials are threaded into the driver DSN so the
+// store authenticates as the orchestrator identity (the btree server enforces startup auth + per-object
+// RBAC), and `tls`/`verify`/`caFile` encrypt + optionally verify the client hop. Empty user => the driver
+// default; enabled=false => orchd runs without a config store (manifest-only reconcile).
+pub struct StoreConfig {
+    pub enabled: bool,
+    pub addr: string,        // host:port of the btree server
+    pub user: string,
+    pub password: string,
+    pub dbname: string,
+    pub tls: bool,           // encrypt the client hop
+    pub verify: bool,        // verify the server cert against caFile (tls=verify)
+    pub caFile: string,      // PEM CA bundle for verification
+    init() {
+        self.enabled = false;
+        self.addr = "127.0.0.1:3009";
+        self.user = "";
+        self.password = "";
+        self.dbname = "";
+        self.tls = false;
+        self.verify = false;
+        self.caFile = "";
+    }
+}
+
+// Build the btreedb driver DSN carrying credentials + TLS options:
+//   btreedb://[user[:password]@]host:port?db=..&tls=..&tlsCAFile=..
+// The driver's parseDsn understands this exact shape; btConnect then sends the user/password in the
+// startup handshake (verified server-side) and, when tls is set, opens a TLS (optionally CA-verified) hop.
+pub fn storeDsn(s: StoreConfig): string {
+    let auth = "";
+    if (!string.eql(s.user, "")) {
+        if (!string.eql(s.password, "")) { auth = `${s.user}:${s.password}@`; }
+        else { auth = `${s.user}@`; }
+    }
+    let q = `?db=${s.dbname}`;
+    if (s.tls) {
+        let mode = if (s.verify) "verify" else "true";
+        q = `${q}&tls=${mode}`;
+        if (!string.eql(s.caFile, "")) { q = `${q}&tlsCAFile=${s.caFile}`; }
+    }
+    return `btreedb://${auth}${s.addr}${q}`;
+}
+
+pub fn validateStore(s: StoreConfig): string {
+    if (!s.enabled) { return ""; }
+    if (string.eql(s.addr, "")) { return "store.addr must not be empty when the store is enabled"; }
+    if (s.verify && string.eql(s.caFile, "")) { return "store.verify requires store.caFile"; }
+    if (s.verify && !s.tls) { return "store.verify requires store.tls"; }
+    return "";
+}
+
 // ---- orchd (control plane) ----
 
 pub struct OrchConfig {
@@ -168,12 +222,14 @@ pub struct OrchConfig {
     // Optional service-discovery publication: the endpoints orchd advertises for proxyd to consume.
     pub discoveryFile: string,       // "" = do not publish
     pub advertiseHost: string,       // host proxyd should reach the replicas on (published in the file)
+    pub store: StoreConfig,          // O4: authenticated (+ optional TLS) btree config-store connection
     init() {
         self.manifestsDir = "manifests";
         self.reconcileMs = 2000;
         self.nodeId = "node-1";
         self.discoveryFile = "";
         self.advertiseHost = "127.0.0.1";
+        self.store = StoreConfig();
     }
 }
 
@@ -186,6 +242,18 @@ pub fn loadOrchConfig(path: string): OrchConfig {
     c.nodeId = json.asString(json.get(root, "nodeId")) ?? c.nodeId;
     c.discoveryFile = json.asString(json.get(root, "discoveryFile")) ?? c.discoveryFile;
     c.advertiseHost = json.asString(json.get(root, "advertiseHost")) ?? c.advertiseHost;
+
+    if (json.has(root, "store")) {
+        let st = json.get(root, "store");
+        c.store.enabled = json.asBool(json.get(st, "enabled")) ?? true;
+        c.store.addr = json.asString(json.get(st, "addr")) ?? c.store.addr;
+        c.store.user = json.asString(json.get(st, "user")) ?? c.store.user;
+        c.store.password = json.asString(json.get(st, "password")) ?? c.store.password;
+        c.store.dbname = json.asString(json.get(st, "dbname")) ?? c.store.dbname;
+        c.store.tls = json.asBool(json.get(st, "tls")) ?? c.store.tls;
+        c.store.verify = json.asBool(json.get(st, "verify")) ?? c.store.verify;
+        c.store.caFile = json.asString(json.get(st, "caFile")) ?? c.store.caFile;
+    }
     return c;
 }
 
@@ -193,5 +261,7 @@ pub fn validateOrch(c: OrchConfig): string {
     if (string.eql(c.manifestsDir, "")) { return "manifestsDir must not be empty"; }
     if (c.reconcileMs <= 0) { return `reconcileMs must be > 0 (got ${c.reconcileMs})`; }
     if (string.eql(c.nodeId, "")) { return "nodeId must not be empty"; }
+    let se = validateStore(c.store);
+    if (!string.eql(se, "")) { return se; }
     return "";
 }

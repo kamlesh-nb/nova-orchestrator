@@ -124,3 +124,64 @@ fn test_orch_load_from_json(): void {
     assert.equalStr(c.nodeId, "n7");
     assert.equalStr(config.validateOrch(c), "");
 }
+
+// ---- O4: config-store connection carries credentials (+ TLS) ----
+
+@test
+fn test_store_dsn_carries_credentials(): void {
+    let s = config.StoreConfig();
+    s.enabled = true;
+    s.addr = "10.0.0.9:3009";
+    s.user = "orchestrator";
+    s.password = "s3cret";
+    s.dbname = "orchdb";
+    let dsn = config.storeDsn(s);
+    // user:password@ prefix + host:port + db param.
+    assert.isTrue(string.contains(dsn, "orchestrator:s3cret@10.0.0.9:3009"));
+    assert.isTrue(string.contains(dsn, "db=orchdb"));
+    assert.isFalse(string.contains(dsn, "tls="));   // TLS off -> no tls param
+}
+
+@test
+fn test_store_dsn_with_tls_verify(): void {
+    let s = config.StoreConfig();
+    s.enabled = true;
+    s.addr = "db.internal:3009";
+    s.user = "orch";
+    s.password = "";                 // user with no password -> `user@`
+    s.tls = true;
+    s.verify = true;
+    s.caFile = "/etc/nova/ca.pem";
+    let dsn = config.storeDsn(s);
+    assert.isTrue(string.contains(dsn, "orch@db.internal:3009"));
+    assert.isTrue(string.contains(dsn, "tls=verify"));
+    assert.isTrue(string.contains(dsn, "tlsCAFile=/etc/nova/ca.pem"));
+}
+
+@test
+fn test_store_validation(): void {
+    let s = config.StoreConfig();               // disabled -> always valid
+    assert.equalStr(config.validateStore(s), "");
+    s.enabled = true;
+    s.verify = true;                            // verify without tls / caFile -> invalid
+    assert.isFalse(string.eql(config.validateStore(s), ""));
+    s.tls = true;
+    s.caFile = "/etc/ca.pem";
+    assert.equalStr(config.validateStore(s), "");
+}
+
+@test
+fn test_orch_load_store_section(): void {
+    let path = "/tmp/nova_orch_test_orchd_store.json";
+    file.File.writeText(path,
+        "{\"nodeId\":\"n1\",\"store\":{\"enabled\":true,\"addr\":\"127.0.0.1:3009\","
+        + "\"user\":\"orch\",\"password\":\"pw\",\"dbname\":\"cfg\",\"tls\":true}}");
+    let c = config.loadOrchConfig(path);
+    assert.isTrue(c.store.enabled);
+    assert.equalStr(c.store.user, "orch");
+    assert.isTrue(c.store.tls);
+    assert.equalStr(config.validateOrch(c), "");
+    let dsn = config.storeDsn(c.store);
+    assert.isTrue(string.contains(dsn, "orch:pw@127.0.0.1:3009"));
+    assert.isTrue(string.contains(dsn, "tls=true"));
+}
