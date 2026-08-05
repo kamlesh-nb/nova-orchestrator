@@ -1,0 +1,194 @@
+// cfg/config.nova -- typed, validated JSON configuration for the two orchestrator binaries.
+//
+// The stack is split into a DATA plane (proxyd, net.*) and a CONTROL plane (orchd, orch.*/store.*),
+// each with its own binary and its own config file. This module is the single place that reads and
+// VALIDATES those files, so a bad config fails loudly at startup with a clear message instead of the
+// daemon limping on with silent defaults (the same "no env band-aids" discipline the btree config took).
+//
+// A missing file is allowed (every field has a sensible default); a PRESENT file with a malformed value
+// or an out-of-range field is a hard error surfaced through validate().
+import serde.json;
+import list;
+import string;
+import io.file;
+import env;
+
+// Resolve the config-file path: first positional (non-flag) CLI argument, else `envVar`, else `dflt`.
+// Shared by both daemons so `proxyd [config.json]` / `orchd [config.json]` and PROXYD_CONFIG /
+// ORCHD_CONFIG behave identically; `--flags` are skipped here (see hasFlag).
+pub fn resolveConfigPath(envVar: string, dflt: string): string {
+    let a = env.args();
+    let i = 1;
+    while (i < a.size()) {
+        let p = a.get(i) ?? "";
+        if (!string.eql(p, "") && !string.startsWith(p, "-")) { return p; }
+        i = i + 1;
+    }
+    let e = env.get(envVar);
+    if (!string.eql(e, "")) { return e; }
+    return dflt;
+}
+
+// Whether a CLI flag (e.g. "--check") was passed. `--check` makes a daemon load + validate its config
+// and exit 0/1 WITHOUT serving -- a config lint for CI and operators.
+pub fn hasFlag(name: string): bool {
+    let a = env.args();
+    let i = 1;
+    while (i < a.size()) {
+        if (string.eql(a.get(i) ?? "", name)) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+// ---- proxyd (data plane) ----
+
+// One static backend in the proxy pool. `weight` drives the Weighted LB strategy (default 1).
+pub struct BackendCfg {
+    pub host: string,
+    pub port: int,
+    pub weight: int,
+    init(host: string, port: int, weight: int) {
+        self.host = host;
+        self.port = port;
+        self.weight = weight;
+    }
+}
+
+pub struct ProxyConfig {
+    pub listenHost: string,          // "" = any interface
+    pub listenPort: int,
+    pub timeoutMs: int,              // per-upstream I/O deadline
+    pub strategy: string,            // roundrobin | weighted | leastconn | consistenthash
+    pub healthChecks: bool,
+    pub healthPath: string,
+    pub healthIntervalMs: int,
+    pub healthTimeoutMs: int,
+    pub healthRise: int,
+    pub healthFall: int,
+    pub backends: list.List<BackendCfg>,
+    // Control-plane seam: when set, proxyd resolves its backend endpoint from a service-discovery file
+    // (written by orchd's ServiceRegistry) instead of, or in addition to, the static `backends` list.
+    pub discoveryFile: string,
+    pub discoveryService: string,
+    init() {
+        self.listenHost = "";
+        self.listenPort = 8080;
+        self.timeoutMs = 15000;
+        self.strategy = "roundrobin";
+        self.healthChecks = false;
+        self.healthPath = "/healthz";
+        self.healthIntervalMs = 2000;
+        self.healthTimeoutMs = 1000;
+        self.healthRise = 2;
+        self.healthFall = 3;
+        self.backends = list.List<BackendCfg>();
+        self.discoveryFile = "";
+        self.discoveryService = "";
+    }
+}
+
+// Load proxyd config from `path`. A missing file yields all-defaults (dev convenience); a present file
+// overrides field by field. Call validateProxy() on the result before using it.
+pub fn loadProxyConfig(path: string): ProxyConfig {
+    let c = ProxyConfig();
+    if (!file.File.exists(path)) { return c; }
+    let root = json.parse(file.File.readText(path));
+
+    c.listenHost = json.asString(json.get(root, "listenHost")) ?? c.listenHost;
+    c.listenPort = (json.asNumber(json.get(root, "listenPort")) ?? (c.listenPort as long)) as int;
+    c.timeoutMs = (json.asNumber(json.get(root, "timeoutMs")) ?? (c.timeoutMs as long)) as int;
+    c.strategy = json.asString(json.get(root, "strategy")) ?? c.strategy;
+    c.discoveryFile = json.asString(json.get(root, "discoveryFile")) ?? c.discoveryFile;
+    c.discoveryService = json.asString(json.get(root, "discoveryService")) ?? c.discoveryService;
+
+    if (json.has(root, "health")) {
+        let h = json.get(root, "health");
+        c.healthChecks = json.asBool(json.get(h, "enabled")) ?? true;
+        c.healthPath = json.asString(json.get(h, "path")) ?? c.healthPath;
+        c.healthIntervalMs = (json.asNumber(json.get(h, "intervalMs")) ?? (c.healthIntervalMs as long)) as int;
+        c.healthTimeoutMs = (json.asNumber(json.get(h, "timeoutMs")) ?? (c.healthTimeoutMs as long)) as int;
+        c.healthRise = (json.asNumber(json.get(h, "rise")) ?? (c.healthRise as long)) as int;
+        c.healthFall = (json.asNumber(json.get(h, "fall")) ?? (c.healthFall as long)) as int;
+    }
+
+    if (json.has(root, "backends")) {
+        let arr = json.get(root, "backends");
+        let n = json.size(arr);
+        let i = 0;
+        while (i < n) {
+            let b = json.at(arr, i);
+            let host = json.asString(json.get(b, "host")) ?? "";
+            let port = (json.asNumber(json.get(b, "port")) ?? 0) as int;
+            let weight = (json.asNumber(json.get(b, "weight")) ?? 1) as int;
+            c.backends.push(BackendCfg(host, port, weight));
+            i = i + 1;
+        }
+    }
+    return c;
+}
+
+// Return "" when valid, else a human-readable reason. Enforces: a listen port; a known LB strategy;
+// a backend source (either static backends or a discovery file); sane health-check bounds.
+pub fn validateProxy(c: ProxyConfig): string {
+    if (c.listenPort <= 0 || c.listenPort > 65535) { return `listenPort out of range: ${c.listenPort}`; }
+    if (!knownStrategy(c.strategy)) { return `unknown strategy: ${c.strategy} (want roundrobin|weighted|leastconn|consistenthash)`; }
+    if (c.backends.size() == 0 && string.eql(c.discoveryFile, "")) {
+        return "no backends: set `backends` or `discoveryFile`+`discoveryService`";
+    }
+    if (!string.eql(c.discoveryFile, "") && string.eql(c.discoveryService, "")) {
+        return "discoveryFile set but discoveryService is empty";
+    }
+    let i = 0;
+    while (i < c.backends.size()) {
+        let b = c.backends.get(i) ?? BackendCfg("", 0, 1);
+        if (string.eql(b.host, "") || b.port <= 0 || b.port > 65535) {
+            return `backend ${i} has an invalid host/port`;
+        }
+        if (b.weight <= 0) { return `backend ${i} weight must be >= 1`; }
+        i = i + 1;
+    }
+    if (c.healthChecks && (c.healthIntervalMs <= 0 || c.healthRise <= 0 || c.healthFall <= 0)) {
+        return "health check bounds must be > 0 when health checks are enabled";
+    }
+    return "";
+}
+
+pub fn knownStrategy(s: string): bool {
+    return string.eql(s, "roundrobin") || string.eql(s, "weighted")
+        || string.eql(s, "leastconn") || string.eql(s, "consistenthash");
+}
+
+// ---- orchd (control plane) ----
+
+pub struct OrchConfig {
+    pub manifestsDir: string,        // dir of *.json workload manifests the nativelet reconciles
+    pub reconcileMs: int,            // reconcile loop period
+    pub nodeId: string,              // this node's identity (leader lease + logging)
+    // Optional service-discovery publication: the endpoints orchd advertises for proxyd to consume.
+    pub discoveryFile: string,       // "" = do not publish
+    init() {
+        self.manifestsDir = "manifests";
+        self.reconcileMs = 2000;
+        self.nodeId = "node-1";
+        self.discoveryFile = "";
+    }
+}
+
+pub fn loadOrchConfig(path: string): OrchConfig {
+    let c = OrchConfig();
+    if (!file.File.exists(path)) { return c; }
+    let root = json.parse(file.File.readText(path));
+    c.manifestsDir = json.asString(json.get(root, "manifestsDir")) ?? c.manifestsDir;
+    c.reconcileMs = (json.asNumber(json.get(root, "reconcileMs")) ?? (c.reconcileMs as long)) as int;
+    c.nodeId = json.asString(json.get(root, "nodeId")) ?? c.nodeId;
+    c.discoveryFile = json.asString(json.get(root, "discoveryFile")) ?? c.discoveryFile;
+    return c;
+}
+
+pub fn validateOrch(c: OrchConfig): string {
+    if (string.eql(c.manifestsDir, "")) { return "manifestsDir must not be empty"; }
+    if (c.reconcileMs <= 0) { return `reconcileMs must be > 0 (got ${c.reconcileMs})`; }
+    if (string.eql(c.nodeId, "")) { return "nodeId must not be empty"; }
+    return "";
+}

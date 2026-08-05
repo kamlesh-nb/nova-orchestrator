@@ -18,11 +18,60 @@ It bundles the whole I1–I4 infrastructure tier:
 | `orch.autoscaler` | PID-driven replica autoscaling for a workload. |
 | `os.sandbox`      | Container-grade isolation dial (levels 0/1/3): Linux namespaces + private rootfs + dropped caps + seccomp. |
 
+## Two binaries: data plane and control plane
+
+The stack ships as **two separate binaries** along the same data-plane / control-plane line Kubernetes
+draws between `kube-proxy` and the controller manager. Each entrypoint lives in `bin/` and pulls only its
+half of the package through the import graph, so dead-code elimination keeps the two genuinely separate.
+
+| Binary | Plane | Owns | Modules |
+|--------|-------|------|---------|
+| **`proxyd`** | data | traffic: L7 reverse proxy, load balancing, health-checked membership, service VIPs | `net.proxy`, `net.service`, `net.autoscale` |
+| **`orchd`**  | control | desired state: manifest reconcile, replica supervision, restart policy, isolation, leader lease, config store | `orch.*`, `store.*`, `os.sandbox` |
+
+They share no process and forward nothing to each other directly. The **only** coupling is a
+service-discovery file: `orchd` publishes live endpoints, `proxyd` reads them (`net.service.resolveFrom`)
+and load-balances across them. Either can run and be restarted independently.
+
+Each reads a **validated JSON config** (a missing file falls back to documented defaults; a present file
+with a bad value fails loudly at startup, never silently defaults):
+
+```sh
+./build.sh                      # builds build/debug/bin/{proxyd,orchd}  (--release for optimised)
+
+proxyd proxyd.json              # serve; or `proxyd` (defaults to ./proxyd.json), or PROXYD_CONFIG=...
+proxyd proxyd.json --check      # validate the config and exit 0/1 WITHOUT serving (CI / operator lint)
+orchd  orchd.json               # reconcile loop; ORCHD_CONFIG=... ; orchd --check to lint
+```
+
+`proxyd.json`:
+
+```json
+{
+  "listenPort": 8080, "timeoutMs": 15000, "strategy": "roundrobin",
+  "health": { "enabled": true, "path": "/healthz", "intervalMs": 2000, "rise": 2, "fall": 3 },
+  "backends": [ { "host": "127.0.0.1", "port": 9001, "weight": 1 },
+                { "host": "127.0.0.1", "port": 9002, "weight": 2 } ],
+  "discoveryFile": "", "discoveryService": ""
+}
+```
+
+`orchd.json`:
+
+```json
+{ "manifestsDir": "manifests", "reconcileMs": 2000, "nodeId": "node-1", "discoveryFile": "" }
+```
+
+`strategy` is one of `roundrobin | weighted | leastconn | consistenthash`. `NOVA_PORT` overrides
+`proxyd`'s listen port so many proxy replicas can run on one host. When `discoveryFile` +
+`discoveryService` are set on `proxyd`, its backend is resolved from that file instead of (or in addition
+to) the static `backends` list.
+
 ## Requirements
 
 Built against the Nova toolchain (`nova`) and its runtime, which provide the seams this package calls:
 `nova_process_spawn` / `_try_wait` / `_pid` / `_spawn_isolated`, `nova_aserver_listen_addr`, the async
-socket/timer primitives (`net.asyncio`), `process`, `io.file`, `io.dir`, `serde.json`, `collections`.
+socket/timer primitives (`net.aio`), `process`, `io.file`, `io.dir`, `serde.json`, `collections`.
 
 **Linux-only features:** cgroups-v2 limits, cgroup-CPU autoscaling, and `os.sandbox` isolation
 (namespaces/rootfs/seccomp) require a Linux host (root / CAP_SYS_ADMIN). On macOS they degrade cleanly to
@@ -44,14 +93,17 @@ import net.proxy;
 import os.sandbox;
 ```
 
-## Usage
+## Usage (programmatic)
+
+The two binaries above are the normal entrypoints. To embed a tier directly, this is exactly what
+`bin/orchd.nova` does (`net.aio` is the async runtime module, formerly `net.asyncio`):
 
 ```nova
 import orch.nativelet;
-import net.asyncio;
+import net.aio;
 
 fn main(): int {
-    asyncio.holdReactors();
+    aio.holdReactors();
     let n = nativelet.Nativelet("manifests");   // watch dir of *.json workload manifests
     let _ = nativelet.run(n, 2000);             // reconcile every 2s, forever
     return 0;

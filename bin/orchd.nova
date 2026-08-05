@@ -1,0 +1,36 @@
+// orchd -- the CONTROL-plane binary of the split orchestrator stack.
+//
+// The node agent (nativelet): it owns DESIRED STATE, not traffic. It watches a directory of JSON
+// workload manifests and reconciles desired vs actual -- spawning replicas, restarting on crash per
+// policy, running health probes -- on a fixed loop. It has no listen port and forwards no requests; the
+// data plane (proxyd) does that. The two coordinate ONLY through a service-discovery file.
+//
+//   orchd [config.json]         # default: orchd.json ; or set ORCHD_CONFIG
+import orch.nativelet;
+import net.aio;
+import cfg.config;
+import string;
+
+fn main(): int {
+    let path = config.resolveConfigPath("ORCHD_CONFIG", "orchd.json");
+    let c = config.loadOrchConfig(path);
+
+    let err = config.validateOrch(c);
+    if (!string.eql(err, "")) {
+        console.log(`orchd: invalid config (${path}): ${err}`);
+        return 1;
+    }
+
+    if (config.hasFlag("--check")) {
+        console.log(`orchd: config OK (${path}), node=${c.nodeId}, manifests=${c.manifestsDir}`);
+        return 0;
+    }
+
+    console.log(`orchd: node=${c.nodeId} reconcile=${c.reconcileMs}ms manifests=${c.manifestsDir}`);
+    // holdReactors before the block-drive (the reconcile loop's async probes need live reactors), then
+    // run the reconcile loop forever. nativelet.run is async; calling it from sync main() block-drives it.
+    aio.holdReactors();
+    let n = nativelet.Nativelet(c.manifestsDir);
+    let _ = nativelet.run(n, c.reconcileMs);
+    return 0;
+}
