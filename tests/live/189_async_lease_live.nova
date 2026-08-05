@@ -13,13 +13,13 @@
 import assert;
 import bytes;
 import db;
-import btreedb;
+import novadb;
 import net.reactor;
 import store.sqlconfig;
 import orch.asynclease;
 
 async fn runLive(donePtr: long): void {
-    let driver = btreedb.BTreeDriver();
+    let driver = novadb.NovaDriver();
     // Two nodes, two independent connections to the same btree.
     let connA = await driver.connect("127.0.0.1:3009");
     let connB = await driver.connect("127.0.0.1:3009");

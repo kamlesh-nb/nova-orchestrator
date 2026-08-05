@@ -16,7 +16,7 @@ import assert;
 import bytes;
 import string;
 import db;
-import btreedb;
+import novadb;
 import net.reactor;
 import store.sqlconfig;
 import store.config;
@@ -28,7 +28,7 @@ fn specJson(name: string, reps: int): string {
 }
 
 async fn runLive(donePtr: long): void {
-    let driver = btreedb.BTreeDriver();
+    let driver = novadb.NovaDriver();
     // Two nodes: independent connections + stores + nativelets over the same btree.
     let connA = await driver.connect("127.0.0.1:3009");
     let connB = await driver.connect("127.0.0.1:3009");

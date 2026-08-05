@@ -5,7 +5,7 @@
 //   (cd btree && rm -rf nova.db wal && ./zig-out/bin/btree &)   # fresh server
 //   (cd lang && nova test ../packages/nova-orchestrator/tests/live/187_sqlconfig_live.nova)
 //
-// It drives the whole etcd-shaped API (ensureSchema/put/get/list/cas/del) over the nova-btreedb driver on
+// It drives the whole etcd-shaped API (ensureSchema/put/get/list/cas/del) over the nova-novadb driver on
 // the reactor, then reconciles a nativelet from list("workloads/") -- proving the store-driven reconcile
 // against real persistence. The reactor is pumped manually (conformance 205 pattern) because the driver's
 // async socket I/O needs a running loop.
@@ -13,7 +13,7 @@ import assert;
 import bytes;
 import string;
 import db;
-import btreedb;
+import novadb;
 import net.reactor;
 import store.sqlconfig;
 import store.config;
@@ -26,7 +26,7 @@ fn specJson(name: string, reps: int): string {
 // The integration coroutine: assertions abort the process on failure (=> test fails); on success it sets
 // done := 1 so the pump loop exits.
 async fn runLive(donePtr: long): void {
-    let driver = btreedb.BTreeDriver();
+    let driver = novadb.NovaDriver();
     let conn = await driver.connect("127.0.0.1:3009");
     let s = sqlconfig.SqlConfigStore(conn);
     await s.ensureSchema();

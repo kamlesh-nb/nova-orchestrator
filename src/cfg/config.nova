@@ -186,11 +186,11 @@ pub struct StoreConfig {
     }
 }
 
-// Build the btreedb driver DSN carrying credentials + TLS options:
-//   btreedb://[user[:password]@]host:port?db=..&tls=..&tlsCAFile=..
-// The driver's parseDsn understands this exact shape; btConnect then sends the user/password in the
+// Build the novadb driver DSN carrying credentials + TLS options:
+//   novadb://[user[:password]@]host:port?db=..&tls=..&tlsCAFile=..
+// The driver's parse understands this exact shape; btConnect then sends the user/password in the
 // startup handshake (verified server-side) and, when tls is set, opens a TLS (optionally CA-verified) hop.
-pub fn storeDsn(s: StoreConfig): string {
+pub fn storeConnectionString(s: StoreConfig): string {
     let auth = "";
     if (!string.eql(s.user, "")) {
         if (!string.eql(s.password, "")) { auth = `${s.user}:${s.password}@`; }
@@ -202,7 +202,7 @@ pub fn storeDsn(s: StoreConfig): string {
         q = `${q}&tls=${mode}`;
         if (!string.eql(s.caFile, "")) { q = `${q}&tlsCAFile=${s.caFile}`; }
     }
-    return `btreedb://${auth}${s.addr}${q}`;
+    return `novadb://${auth}${s.addr}${q}`;
 }
 
 pub fn validateStore(s: StoreConfig): string {
