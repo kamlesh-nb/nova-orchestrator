@@ -1,0 +1,145 @@
+// 197 -- O6 workload lifecycle AT SCALE, deterministic and in-process via the Supervisor simulation seam
+// (virtual replicas: crash injection + restart-policy reaping, no real binaries, no timing races). Covers
+// crash loops per restart policy, rescale up/down, a 50-workload fleet converging after a crash wave, and
+// the crash-loop -> O5 alert tie-in.
+import assert;
+import orch.spec;
+import orch.supervisor;
+import orch.nativelet;
+import orch.alerts;
+import orch.health;
+import list;
+import string;
+
+fn simSup(name: string, replicas: int, policy: string): supervisor.Supervisor {
+    let sp = spec.Spec(name, "/bin/" + name);
+    sp.replicas = replicas;
+    sp.restartPolicy = policy;
+    let sup = supervisor.Supervisor(sp);
+    sup.simulated = true;
+    sup.start();
+    return sup;
+}
+
+// ---- crash loops per restart policy ----
+
+@test
+fn test_always_policy_converges_and_counts_restarts(): void {
+    let sup = simSup("web", 3, "always");
+    assert.equalInt(sup.running(), 3);
+    assert.equalInt(sup.restarts, 0);
+    // Crash one replica five times; each poll reaps + restarts it back to desired.
+    let k = 0;
+    while (k < 5) {
+        sup.simCrash(1, 1);       // one replica exits with a failure code
+        sup.poll();
+        assert.equalInt(sup.running(), 3);   // always converges back to desired
+        k = k + 1;
+    }
+    assert.equalInt(sup.restarts, 5);
+}
+
+@test
+fn test_never_policy_does_not_restart(): void {
+    let sup = simSup("batch", 2, "never");
+    sup.simCrash(2, 0);           // both exit
+    sup.poll();
+    assert.equalInt(sup.running(), 0);       // never restarted
+    assert.equalInt(sup.restarts, 0);
+}
+
+@test
+fn test_on_failure_policy_distinguishes_exit_code(): void {
+    // Clean exit (0) is NOT restarted; a failure (1) IS.
+    let clean = simSup("cln", 1, "on-failure");
+    clean.simCrash(1, 0);
+    clean.poll();
+    assert.equalInt(clean.running(), 0);
+    assert.equalInt(clean.restarts, 0);
+
+    let fail = simSup("fail", 1, "on-failure");
+    fail.simCrash(1, 1);
+    fail.poll();
+    assert.equalInt(fail.running(), 1);      // restarted
+    assert.equalInt(fail.restarts, 1);
+}
+
+// ---- rescale up and down ----
+
+@test
+fn test_rescale_up_and_down(): void {
+    let sp = spec.Spec("api", "/bin/api");
+    sp.replicas = 2;
+    sp.restartPolicy = "always";
+    let sup = supervisor.Supervisor(sp);
+    sup.simulated = true;
+    sup.start();
+    assert.equalInt(sup.running(), 2);
+
+    sup.spec.replicas = 5;        // scale up
+    sup.ensureReplicas();
+    assert.equalInt(sup.running(), 5);
+
+    sup.spec.replicas = 1;        // scale down
+    sup.ensureReplicas();
+    assert.equalInt(sup.running(), 1);
+}
+
+// ---- a 50-workload fleet converges after a crash wave ----
+
+@test
+fn test_fleet_converges_after_crash_wave(): void {
+    let n = nativelet.Nativelet("unused");
+    n.manageProcesses = false;
+    n.simulated = true;
+
+    let desired = list.List<spec.Spec>();
+    let i = 1;
+    while (i <= 50) {
+        let s = spec.Spec(`w${i}`, "/bin/w");
+        s.replicas = 2;
+        s.restartPolicy = "always";
+        desired.push(s);
+        i = i + 1;
+    }
+    n.reconcileWith(desired);
+    assert.equalInt(n.status().size(), 50);
+    assert.equalInt(n.totalRunning(), 100);     // 50 workloads x 2 replicas
+    assert.equalInt(n.underProvisioned(), 0);
+
+    // Crash one replica in every workload -> the whole fleet is momentarily under-provisioned.
+    let j = 0;
+    while (j < n.jobs.size()) {
+        (n.jobs.get(j) ?? nativelet.Job("", supervisor.Supervisor(spec.Spec("", "")), spec.Spec("", ""))).sup.simCrash(1, 1);
+        j = j + 1;
+    }
+    assert.equalInt(n.totalRunning(), 50);      // one down per workload
+    assert.equalInt(n.underProvisioned(), 50);
+
+    // One heal pass restarts them all -> converged.
+    n.pollAll();
+    assert.equalInt(n.totalRunning(), 100);
+    assert.equalInt(n.underProvisioned(), 0);
+}
+
+// ---- crash loop surfaces as an O5 alert ----
+
+@test
+fn test_crash_loop_fires_o5_alert(): void {
+    let sup = simSup("flappy", 1, "always");
+    let k = 0;
+    while (k < 5) {
+        sup.simCrash(1, 1);
+        sup.poll();
+        k = k + 1;
+    }
+    assert.equalInt(sup.restarts, 5);
+
+    let st = list.List<nativelet.WorkloadStatus>();
+    st.push(nativelet.WorkloadStatus("flappy", 1, sup.running(), sup.restarts));
+    let rep = health.HealthReport("standalone", 0, "", true, 1, 1, 0, 0, 0);
+    let al = alerts.evaluate(rep, st, alerts.AlertThresholds());   // crashLoopRestarts default 5
+    assert.isTrue(alerts.criticalCount(al) >= 1);
+    assert.isTrue(string.contains(alerts.renderAlertMetrics(al), "WorkloadCrashLoop"));
+    assert.isTrue(string.contains(alerts.renderAlertMetrics(al), "workload=\"flappy\""));
+}

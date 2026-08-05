@@ -76,12 +76,16 @@ pub struct Nativelet {
     // for proxyd to resolve (net.service.resolveAllFrom). "" disables publication.
     pub discoveryFile: string,
     pub advertiseHost: string,
+    // O6: propagated to every Supervisor -- true = deterministic VIRTUAL replicas (crash-loop / rescale
+    // lifecycle testable in-process without spawning binaries). Independent of manageProcesses.
+    pub simulated: bool,
     init(manifestsDir: string) {
         self.manifestsDir = manifestsDir;
         self.jobs = list.List<Job>();
         self.manageProcesses = true;
         self.discoveryFile = "";
         self.advertiseHost = "127.0.0.1";
+        self.simulated = false;
     }
 
     // Render the service-discovery file contents from the current jobs: one `name=host:port` line per
@@ -155,6 +159,7 @@ pub struct Nativelet {
     fn newJob(self: Nativelet, key: string, sp: spec.Spec): void {
         let sup = supervisor.Supervisor(sp);
         sup.manageProcesses = self.manageProcesses;
+        sup.simulated = self.simulated;
         sup.start();
         self.jobs.push(Job(key, sup, sp));
     }
@@ -230,6 +235,7 @@ pub struct Nativelet {
                     job.sup.stopAll();
                     let sup = supervisor.Supervisor(m.spec);
                     sup.manageProcesses = self.manageProcesses;
+                    sup.simulated = self.simulated;
                     sup.start();
                     self.jobs.set(at, Job(m.key, sup, m.spec));
                 } else {
@@ -277,6 +283,16 @@ pub struct Nativelet {
     // Per-workload observability snapshot (P4 metrics): one WorkloadStatus per running job, in job order.
     // A caller scrapes this each tick for a /metrics endpoint or a structured log line -- the "replica
     // count vs desired" and "restart counts" the Beta observability item calls for. Pure read, no mutation.
+    // Poll every workload's supervisor once: reap crashed replicas and restart them per policy (the "heal"
+    // half of a reconcile tick, decoupled from the manifest re-scan). Drives crash-loop recovery.
+    pub fn pollAll(self: Nativelet): void {
+        let j = 0;
+        while (j < self.jobs.size()) {
+            (self.jobs.get(j) ?? Job("", supervisor.Supervisor(spec.Spec("", "")), spec.Spec("", ""))).sup.poll();
+            j = j + 1;
+        }
+    }
+
     pub fn status(self: Nativelet): list.List<WorkloadStatus> {
         let out = list.List<WorkloadStatus>();
         let j = 0;
