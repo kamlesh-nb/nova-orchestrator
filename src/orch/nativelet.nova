@@ -73,7 +73,7 @@ pub struct Nativelet {
     pub manageProcesses: bool,
     // Control->data plane seam: when discoveryFile != "", each reconcile tick publishes every workload's
     // advertised service endpoints (on advertiseHost) to that file, one `name=host:port` line per replica,
-    // for proxyd to resolve (net.service.resolveAllFrom). "" disables publication.
+    // for service to resolve (net.service.resolveAllFrom). "" disables publication.
     pub discoveryFile: string,
     pub advertiseHost: string,
     // O6: propagated to every Supervisor -- true = deterministic VIRTUAL replicas (crash-loop / rescale
@@ -107,7 +107,7 @@ pub struct Nativelet {
     }
 
     // Write the discovery file atomically-ish (single writeText) when publication is enabled. Called each
-    // reconcile tick by run(); a workload added/removed/rescaled shows up on the next tick, and proxyd's
+    // reconcile tick by run(); a workload added/removed/rescaled shows up on the next tick, and service's
     // active health checks prune any advertised endpoint that is not actually serving yet.
     pub fn publishDiscovery(self: Nativelet): void {
         if (string.eql(self.discoveryFile, "")) { return; }

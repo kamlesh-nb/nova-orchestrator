@@ -31,7 +31,7 @@ pub struct Spec {
     // Service exposure (the control->data plane seam). When basePort > 0, replica i listens on
     // basePort + i and the supervisor passes that port via `portFlag` (e.g. "--port") on spawn; orchd
     // then ADVERTISES host:basePort .. host:(basePort+replicas-1) as the workload's service endpoints for
-    // proxyd to load-balance across. basePort == 0 means "not directly exposed" (advertise the single
+    // service to load-balance across. basePort == 0 means "not directly exposed" (advertise the single
     // probePort if any, shared via SO_REUSEPORT).
     pub basePort: int,
     pub portFlag: string,
@@ -105,7 +105,7 @@ pub fn parseSpec(text: string): Spec {
 // The service endpoints a workload ADVERTISES on `host`: one per replica at basePort + i when directly
 // exposed (basePort > 0), else the single shared probePort (SO_REUSEPORT) if any, else none. Pure and
 // deterministic (independent of how many replicas are live right now) -- the CONTROL plane advertises the
-// desired topology; the data plane (proxyd) health-checks which of them are actually up. Callers own the list.
+// desired topology; the data plane (service) health-checks which of them are actually up. Callers own the list.
 pub fn serviceEndpoints(s: Spec, host: string): List<string> {
     let out = List<string>();
     if (s.basePort > 0) {

@@ -3,7 +3,7 @@
 // The node agent (nativelet): it owns DESIRED STATE, not traffic. It watches a directory of JSON
 // workload manifests and reconciles desired vs actual -- spawning replicas, restarting on crash per
 // policy, running health probes -- on a fixed loop. It has no listen port and forwards no requests; the
-// data plane (proxyd) does that. The two coordinate ONLY through a service-discovery file.
+// data plane (service) does that. The two coordinate ONLY through a service-discovery file.
 //
 //   orchd [config.json]         # default: orchd.json ; or set ORCHD_CONFIG
 import orch.nativelet;
@@ -69,7 +69,7 @@ fn main(): int {
     // run the reconcile loop forever. nativelet.run is async; calling it from sync main() block-drives it.
     aio.holdReactors();
     let n = nativelet.Nativelet(c.manifestsDir);
-    // Publish live service endpoints for proxyd to load-balance across (no-op unless discoveryFile is set).
+    // Publish live service endpoints for service to load-balance across (no-op unless discoveryFile is set).
     n.discoveryFile = c.discoveryFile;
     n.advertiseHost = c.advertiseHost;
     // Block-drive the async composition root (reconcile loop + optional metrics publisher).

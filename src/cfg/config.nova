@@ -1,6 +1,6 @@
 // cfg/config.nova -- typed, validated JSON configuration for the two orchestrator binaries.
 //
-// The stack is split into a DATA plane (proxyd, net.*) and a CONTROL plane (orchd, orch.*/store.*),
+// The stack is split into a DATA plane (service, net.*) and a CONTROL plane (orchd, orch.*/store.*),
 // each with its own binary and its own config file. This module is the single place that reads and
 // VALIDATES those files, so a bad config fails loudly at startup with a clear message instead of the
 // daemon limping on with silent defaults (the same "no env band-aids" discipline the btree config took).
@@ -14,7 +14,7 @@ import io.file;
 import env;
 
 // Resolve the config-file path: first positional (non-flag) CLI argument, else `envVar`, else `dflt`.
-// Shared by both daemons so `proxyd [config.json]` / `orchd [config.json]` and PROXYD_CONFIG /
+// Shared by both daemons so `service [config.json]` / `orchd [config.json]` and SERVICE_CONFIG /
 // ORCHD_CONFIG behave identically; `--flags` are skipped here (see hasFlag).
 pub fn resolveConfigPath(envVar: string, dflt: string): string {
     let a = env.args();
@@ -41,7 +41,7 @@ pub fn hasFlag(name: string): bool {
     return false;
 }
 
-// ---- proxyd (data plane) ----
+// ---- service (data plane) ----
 
 // One static backend in the proxy pool. `weight` drives the Weighted LB strategy (default 1).
 pub struct BackendCfg {
@@ -67,7 +67,7 @@ pub struct ProxyConfig {
     pub healthRise: int,
     pub healthFall: int,
     pub backends: list.List<BackendCfg>,
-    // Control-plane seam: when set, proxyd resolves its backend endpoint from a service-discovery file
+    // Control-plane seam: when set, service resolves its backend endpoint from a service-discovery file
     // (written by orchd's ServiceRegistry) instead of, or in addition to, the static `backends` list.
     pub discoveryFile: string,
     pub discoveryService: string,
@@ -88,7 +88,7 @@ pub struct ProxyConfig {
     }
 }
 
-// Load proxyd config from `path`. A missing file yields all-defaults (dev convenience); a present file
+// Load service config from `path`. A missing file yields all-defaults (dev convenience); a present file
 // overrides field by field. Call validateProxy() on the result before using it.
 pub fn loadProxyConfig(path: string): ProxyConfig {
     let c = ProxyConfig();
@@ -219,9 +219,9 @@ pub struct OrchConfig {
     pub manifestsDir: string,        // dir of *.json workload manifests the nativelet reconciles
     pub reconcileMs: int,            // reconcile loop period
     pub nodeId: string,              // this node's identity (leader lease + logging)
-    // Optional service-discovery publication: the endpoints orchd advertises for proxyd to consume.
+    // Optional service-discovery publication: the endpoints orchd advertises for service to consume.
     pub discoveryFile: string,       // "" = do not publish
-    pub advertiseHost: string,       // host proxyd should reach the replicas on (published in the file)
+    pub advertiseHost: string,       // host service should reach the replicas on (published in the file)
     pub store: StoreConfig,          // O4: authenticated (+ optional TLS) btree config-store connection
     // O5 observability: when metricsFile is set, orchd writes Prometheus exposition text (+ orch_alert
     // series) there each reconcile tick for a node_exporter textfile collector to scrape; crashLoopRestarts

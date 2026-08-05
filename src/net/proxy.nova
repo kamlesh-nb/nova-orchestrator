@@ -739,7 +739,7 @@ async fn runProxy(pool: Pool, host: string, port: int, tmo: int): int {
 // Single-reactor serve on THIS thread. Mirrors web/app.nova's reactorWorkerBody: create a reactor, make
 // it current, start the health-check + accept coroutines on it, then drive the poll loop forever. This
 // is the reactor-native replacement for the retired Asio pump (holdReactors + Asio io_context). Blocks.
-// Share-nothing per PROCESS: scale as N proxyd instances behind SO_REUSEPORT, orchestrator-managed.
+// Share-nothing per PROCESS: scale as N service instances behind SO_REUSEPORT, orchestrator-managed.
 pub fn serveOnReactor(pool: Pool, port: int, tmo: int): void {
     let r = poller.Reactor(1024, 16384, 1024);
     poller.setCurrent(r.kq);
@@ -759,9 +759,9 @@ pub fn serveOnReactor(pool: Pool, port: int, tmo: int): void {
 
 // ---------------------------------------------------------------------------
 // fd-passing handoff mode (L4-style, out-of-path). Instead of reading the request, dialling a backend,
-// and shuttling bytes both ways, proxyd PASSES the client socket to a backend app over an AF_UNIX
-// control channel (SCM_RIGHTS); the app replies to the client directly and proxyd is out of the data
-// path. proxyd does not parse HTTP here, so selection is per-CONNECTION round-robin (no path affinity,
+// and shuttling bytes both ways, service PASSES the client socket to a backend app over an AF_UNIX
+// control channel (SCM_RIGHTS); the app replies to the client directly and service is out of the data
+// path. service does not parse HTTP here, so selection is per-CONNECTION round-robin (no path affinity,
 // no response buffering, no keep-alive backend pool -- none of those apply once the app owns the socket).
 // Same-host only: fd-passing cannot cross a kernel, which fits the orchd co-resident node topology.
 // ---------------------------------------------------------------------------
@@ -789,7 +789,7 @@ async fn handoffCtrlAcceptLoop(h: Handoff, ulfd: int, kq: int): int {
     return 0;
 }
 
-// Accept TCP clients on the front port and hand each one to a backend app round-robin. proxyd never
+// Accept TCP clients on the front port and hand each one to a backend app round-robin. service never
 // reads the client socket: it passes the fd straight over the control channel and closes its own copy.
 async fn handoffClientAcceptLoop(h: Handoff, port: int, kq: int): int {
     let lfd = sys.socket(sys.AF_INET, sys.SOCK_STREAM, 0);
@@ -820,7 +820,7 @@ async fn handoffClientAcceptLoop(h: Handoff, port: int, kq: int): int {
                 h.cursor = h.cursor + 1;
                 let ctrl = h.ctrls.get(idx) ?? -1;
                 let sent = socket.sendFd(ctrl, cfd, "");
-                socket.close(cfd);                      // hand-off done: proxyd drops out of the data path
+                socket.close(cfd);                      // hand-off done: service drops out of the data path
                 if (sent < 0) {                         // the backend app died: drop its control channel
                     socket.close(ctrl);
                     h.ctrls.remove(idx);

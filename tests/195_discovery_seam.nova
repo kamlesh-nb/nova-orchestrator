@@ -1,5 +1,5 @@
 // 195 -- the control->data plane seam: orchd advertises each workload's service endpoints to a discovery
-// file, proxyd resolves ALL of them into its backend pool. Offline/deterministic: it drives the nativelet
+// file, service resolves ALL of them into its backend pool. Offline/deterministic: it drives the nativelet
 // with specs directly (manageProcesses off, no real spawn) and exercises the pure endpoint model + the
 // file round-trip + the proxy-pool consumption, so the two binaries' coupling is gated without sockets.
 import assert;
@@ -95,7 +95,7 @@ fn test_discovery_reflects_removal(): void {
     assert.isFalse(string.contains(text, "api="));
 }
 
-// ---- proxyd consumption: a discovery file with N endpoints -> an N-backend pool ----
+// ---- service consumption: a discovery file with N endpoints -> an N-backend pool ----
 
 @test
 fn test_proxy_pool_from_discovery(): void {

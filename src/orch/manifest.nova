@@ -3,7 +3,7 @@
 // One YAML document describes everything the control plane needs to run and front an app: the binary
 // and how many replicas to keep (a min/max band), the autoscaler policy, the load-balancer strategy,
 // health probing, network exposure, HTTP routes, and resource limits. It replaces the scattered
-// config (proxyd.json + env vars + code-configured autoscaler): orchd loads these manifests, the
+// config (service.json + env vars + code-configured autoscaler): orchd loads these manifests, the
 // gateway reads the LB/exposure, and the autoscaler reads its gains — all from here.
 //
 // Parsed with the compiler-generated binder over YAML: `Manifest__bind(source.fromYaml(text))`. Every

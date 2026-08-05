@@ -123,7 +123,7 @@ pub fn resolveFrom(registryFile: string, name: string): string {
 
 // Resolve ALL endpoints registered under `name` -- one per matching `name=host:port` line. This is the
 // multi-replica form of resolveFrom: orchd advertises every replica endpoint of a service as a separate
-// line, and proxyd builds its whole backend pool from them. Returns an empty list when the file or the
+// line, and service builds its whole backend pool from them. Returns an empty list when the file or the
 // name is absent. Caller owns the list.
 pub fn resolveAllFrom(registryFile: string, name: string): list.List<string> {
     let out = list.List<string>();

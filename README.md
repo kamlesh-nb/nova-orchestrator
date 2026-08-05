@@ -26,7 +26,7 @@ half of the package through the import graph, so dead-code elimination keeps the
 
 | Binary | Plane | Owns | Modules |
 |--------|-------|------|---------|
-| **`proxyd`** | data | traffic: L7 reverse proxy, load balancing, health-checked membership, service VIPs | `net.proxy`, `net.service`, `net.autoscale` |
+| **`service`** | data | traffic: L7 reverse proxy, load balancing, health-checked membership, service VIPs | `net.proxy`, `net.service`, `net.autoscale` |
 | **`orchd`**  | control | desired state: manifest reconcile, replica supervision, restart policy, isolation, leader lease, config store, `/metrics` + alerts | `orch.*`, `store.*`, `os.sandbox` |
 | **`orchctl`** | ops | an OFFLINE operator CLI over a config-store backup dump: inspect, edit cluster membership, print a rolling-upgrade plan | `orch.membership`, `orch.backup`, `orch.rollout` |
 
@@ -38,27 +38,27 @@ service-discovery file, and it is fully wired:
   `"service": { "basePort": 9000, "portFlag": "--port" }` in its manifest: replica *i* is spawned on
   `basePort + i` (the port passed via `portFlag`) and advertised on `advertiseHost`. A workload with no
   `basePort` advertises its single shared `probe.port` instead.
-- `proxyd` resolves **all** endpoints for its `discoveryService` from that file
+- `service` resolves **all** endpoints for its `discoveryService` from that file
   (`net.service.resolveAllFrom`) into its backend pool, and its active health checks prune any advertised
   endpoint that is not actually serving yet. So the control plane advertises the desired topology and the
   data plane owns liveness.
 
 Either can run and be restarted independently. End to end: `orchd` writes
-`web=127.0.0.1:9000` / `web=127.0.0.1:9001`; a `proxyd` whose config sets `discoveryService: "web"` then
+`web=127.0.0.1:9000` / `web=127.0.0.1:9001`; a `service` whose config sets `discoveryService: "web"` then
 load-balances across both replicas.
 
 Each reads a **validated JSON config** (a missing file falls back to documented defaults; a present file
 with a bad value fails loudly at startup, never silently defaults):
 
 ```sh
-./build.sh                      # builds build/debug/bin/{proxyd,orchd}  (--release for optimised)
+./build.sh                      # builds build/debug/bin/{service,orchd}  (--release for optimised)
 
-proxyd proxyd.json              # serve; or `proxyd` (defaults to ./proxyd.json), or PROXYD_CONFIG=...
-proxyd proxyd.json --check      # validate the config and exit 0/1 WITHOUT serving (CI / operator lint)
+service service.json              # serve; or `service` (defaults to ./service.json), or SERVICE_CONFIG=...
+service service.json --check      # validate the config and exit 0/1 WITHOUT serving (CI / operator lint)
 orchd  orchd.json               # reconcile loop; ORCHD_CONFIG=... ; orchd --check to lint
 ```
 
-`proxyd.json`:
+`service.json`:
 
 ```json
 {
@@ -77,8 +77,8 @@ orchd  orchd.json               # reconcile loop; ORCHD_CONFIG=... ; orchd --che
 ```
 
 `strategy` is one of `roundrobin | weighted | leastconn | consistenthash`. `NOVA_PORT` overrides
-`proxyd`'s listen port so many proxy replicas can run on one host. When `discoveryFile` +
-`discoveryService` are set on `proxyd`, its backend is resolved from that file instead of (or in addition
+`service`'s listen port so many proxy replicas can run on one host. When `discoveryFile` +
+`discoveryService` are set on `service`, its backend is resolved from that file instead of (or in addition
 to) the static `backends` list.
 
 ## Requirements

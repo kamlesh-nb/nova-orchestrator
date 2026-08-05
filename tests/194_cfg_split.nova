@@ -1,4 +1,4 @@
-// 194 -- config surface for the split proxyd/orchd binaries: defaults, JSON load, and validation.
+// 194 -- config surface for the split service/orchd binaries: defaults, JSON load, and validation.
 // Pure/offline (no sockets); exercises cfg.config the two entrypoints depend on so a bad config is
 // rejected loudly at startup rather than silently defaulted.
 import assert;
@@ -6,7 +6,7 @@ import cfg.config;
 import string;
 import io.file;
 
-// ---- proxyd defaults + validation ----
+// ---- service defaults + validation ----
 
 @test
 fn test_proxy_defaults(): void {
@@ -62,11 +62,11 @@ fn test_known_strategy(): void {
     assert.isFalse(config.knownStrategy("random"));
 }
 
-// ---- proxyd JSON load round-trip ----
+// ---- service JSON load round-trip ----
 
 @test
 fn test_proxy_load_from_json(): void {
-    let path = "/tmp/nova_orch_test_proxyd.json";
+    let path = "/tmp/nova_orch_test_service.json";
     file.File.writeText(path,
         "{\"listenPort\":9443,\"strategy\":\"weighted\","
         + "\"health\":{\"enabled\":true,\"intervalMs\":1500},"

@@ -223,7 +223,7 @@ pub struct Supervisor {
     }
 
     // The service endpoints this workload ADVERTISES on `host` -- the desired topology (pure; see
-    // spec.serviceEndpoints). orchd publishes these to the discovery file; proxyd health-checks liveness.
+    // spec.serviceEndpoints). orchd publishes these to the discovery file; service health-checks liveness.
     pub fn advertisedEndpoints(self: Supervisor, host: string): list.List<string> {
         return spec.serviceEndpoints(self.spec, host);
     }

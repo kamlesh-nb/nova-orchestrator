@@ -1,25 +1,19 @@
-// proxyd -- the DATA-plane binary of the split orchestrator stack.
+// service -- the DATA-plane binary of the split orchestrator stack (formerly proxyd).
 //
-// A standalone L7 reverse proxy / load balancer: it owns TRAFFIC, nothing else. It builds a backend
+// A standalone L7/L4 reverse proxy + load balancer: it owns TRAFFIC, nothing else. It builds a backend
 // Pool from a validated JSON config (static backends and/or a control-plane service-discovery file that
 // orchd publishes), applies the configured LB strategy + active health checks, and serves forever with
-// the share-nothing per-reactor accept fan-out. It has no knowledge of workload lifecycle, manifests, or
-// the config store -- that is orchd's job. The two coordinate ONLY through the discovery file.
+// the share-nothing per-reactor accept fan-out. In fd-handoff mode it passes client sockets to the app
+// directly (out of the data path). It has no knowledge of workload lifecycle, manifests, or the config
+// store -- that is orchd's job. The two coordinate ONLY through the discovery file.
 //
-//   proxyd [config.json]        # default: proxyd.json ; or set PROXYD_CONFIG ; NOVA_PORT overrides the port
+//   service [config.json]       # default: service.json ; or set SERVICE_CONFIG ; NOVA_PORT overrides the port
 import net.proxy;
 import net.service;
 import net.aio;
 import cfg.config;
 import env;
 import string;
-
-fn strategyOf(s: string): proxy.LbStrategy {
-    if (string.eql(s, "weighted")) { return proxy.LbStrategy.Weighted; }
-    if (string.eql(s, "leastconn")) { return proxy.LbStrategy.LeastConn; }
-    if (string.eql(s, "consistenthash")) { return proxy.LbStrategy.ConsistentHash; }
-    return proxy.LbStrategy.RoundRobin;
-}
 
 // Add EVERY endpoint advertised for the service in the discovery file (written by orchd each reconcile
 // tick), so the pool tracks all replicas the control plane manages. Active health checks then prune any
@@ -42,36 +36,36 @@ fn addDiscovered(pool: proxy.Pool, discoveryFile: string, svc: string): int {
 }
 
 fn main(): int {
-    let path = config.resolveConfigPath("PROXYD_CONFIG", "proxyd.json");
+    let path = config.resolveConfigPath("SERVICE_CONFIG", "service.json");
     let c = config.loadProxyConfig(path);
 
-    // Port override for parity with the flagship NOVA_PORT convention (many proxyd replicas on one host).
+    // Port override for parity with the flagship NOVA_PORT convention (many service replicas on one host).
     let pe = env.get("NOVA_PORT");
     if (!string.eql(pe, "")) { c.listenPort = string.parseI64(pe) as int; }
 
-    // fd-passing handoff mode (out-of-path, L4-style): when NOVA_HANDOFF_SOCK is set, proxyd binds that
-    // AF_UNIX rendezvous and hands accepted client sockets to backend apps that connect to it, instead of
-    // forwarding bytes to a static/discovered backend Pool. No backends config is needed (apps register
-    // themselves), so this bypasses pool building and the empty-pool guard. Same-host only.
+    // fd-passing handoff mode (out-of-path, L4-style): when NOVA_HANDOFF_SOCK is set, the service binds
+    // that AF_UNIX rendezvous and hands accepted client sockets to backend apps that connect to it,
+    // instead of forwarding bytes to a static/discovered backend Pool. No backends config is needed (apps
+    // register themselves), so this bypasses pool building and the empty-pool guard. Same-host only.
     let handoff = env.get("NOVA_HANDOFF_SOCK");
     if (!string.eql(handoff, "")) {
         if (config.hasFlag("--check")) {
-            console.log(`proxyd: config OK (handoff mode, socket ${handoff}, port ${c.listenPort})`);
+            console.log(`service: config OK (handoff mode, socket ${handoff}, port ${c.listenPort})`);
             return 0;
         }
-        console.log(`proxyd: listening on *:${c.listenPort} (fd-handoff via ${handoff})`);
+        console.log(`service: listening on *:${c.listenPort} (fd-handoff via ${handoff})`);
         proxy.serveHandoffOnReactor(c.listenPort, handoff, c.timeoutMs);
         return 0;
     }
 
     let err = config.validateProxy(c);
     if (!string.eql(err, "")) {
-        console.log(`proxyd: invalid config (${path}): ${err}`);
+        console.log(`service: invalid config (${path}): ${err}`);
         return 1;
     }
 
     let pool = proxy.Pool();
-    pool.setStrategy(strategyOf(c.strategy));
+    pool.setStrategy(proxy.strategyFromName(c.strategy));
     if (c.healthChecks) {
         pool.setHealthPath(c.healthPath);
         pool.enableHealthChecks(c.healthIntervalMs, c.healthTimeoutMs, c.healthRise, c.healthFall);
@@ -85,19 +79,19 @@ fn main(): int {
     let _ = addDiscovered(pool, c.discoveryFile, c.discoveryService);
 
     if (pool.size() == 0) {
-        console.log("proxyd: no live backends (static + discovery both empty); refusing to start");
+        console.log("service: no live backends (static + discovery both empty); refusing to start");
         return 1;
     }
 
     if (config.hasFlag("--check")) {
-        console.log(`proxyd: config OK (${path}), ${pool.size()} backend(s), strategy=${c.strategy}`);
+        console.log(`service: config OK (${path}), ${pool.size()} backend(s), strategy=${c.strategy}`);
         return 0;
     }
 
     let bindHost = if (string.eql(c.listenHost, "")) "*" else c.listenHost;
-    console.log(`proxyd: listening on ${bindHost}:${c.listenPort}, ${pool.size()} backend(s), strategy=${c.strategy}, health=${c.healthChecks}`);
+    console.log(`service: listening on ${bindHost}:${c.listenPort}, ${pool.size()} backend(s), strategy=${c.strategy}, health=${c.healthChecks}`);
     // Single reactor on this thread (share-nothing per process). serveOnReactor creates + drives the
-    // reactor and blocks forever. To use more cores, run more proxyd instances behind SO_REUSEPORT and
+    // reactor and blocks forever. To use more cores, run more service instances behind SO_REUSEPORT and
     // let the orchestrator manage them (the horizontal-scaling model; see the deployment guide).
     proxy.serveOnReactor(pool, c.listenPort, c.timeoutMs);
     return 0;
