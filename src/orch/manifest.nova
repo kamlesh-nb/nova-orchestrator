@@ -25,6 +25,7 @@ import serde.source;
 import io.file;
 import string;
 import list;
+import orch.spec;
 
 @serializable
 struct Metadata {
@@ -108,7 +109,12 @@ struct Health {
 @serializable
 struct Network {
     pub expose: string,          // gateway-only | public
-    init() { self.expose = "gateway-only"; }
+    // Exposure port config, used ONLY when expose == "public": replica i binds portBase + i and the
+    // supervisor passes that port via portFlag on spawn (e.g. "--port"). Ignored for gateway-only
+    // (handoff apps have no listening port). portBase 0 = not directly exposed.
+    pub portBase: int,
+    pub portFlag: string,
+    init() { self.expose = "gateway-only"; self.portBase = 0; self.portFlag = ""; }
 }
 
 // cgroups-v2 resource limits (Linux; 0 = unset). cpuMilli is milli-CPU (500 = 0.5 core).
@@ -184,4 +190,29 @@ pub fn validateManifest(m: Manifest): string {
         if (m.autoscale.setpoint <= 0.0) { return "autoscale.setpoint must be > 0 when autoscaling"; }
     }
     return "";
+}
+
+// Lower a Manifest to the supervisor's Spec — the seam between the declarative surface and the process
+// runner. The supervisor keeps `replicas` copies running; the INITIAL desired count is replicas.min, and
+// the control-plane autoscaler later drives spec.replicas within [replicas.min, replicas.max]. Exposure:
+// a "public" app binds network.portBase (+ i per replica) via portFlag and probes that port; a
+// "gateway-only" app is not directly exposed (basePort 0) — it is reached via the gateway (fd-handoff on
+// macOS/Windows, veth on Linux), so no host port is advertised.
+pub fn toSpec(m: Manifest): spec.Spec {
+    let s = spec.Spec(m.metadata.name, m.workload.binary);
+    let i = 0;
+    while (i < m.workload.args.size()) { s.args.push(m.workload.args.get(i) ?? ""); i = i + 1; }
+    s.restartPolicy = m.workload.restartPolicy;
+    s.replicas = if (m.replicas.min < 1) 1 else m.replicas.min;
+    s.cpuMilli = m.resources.cpuMilli;
+    s.memMaxBytes = m.resources.memMaxBytes;
+    s.pidsMax = m.resources.pidsMax;
+    s.probePath = m.health.path;
+    s.probePeriodMs = if (m.health.intervalMs > 0) m.health.intervalMs else 2000;
+    if (string.eql(m.network.expose, "public") && m.network.portBase > 0) {
+        s.basePort = m.network.portBase;
+        s.portFlag = m.network.portFlag;
+        s.probePort = m.network.portBase;
+    }
+    return s;
 }

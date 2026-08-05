@@ -1,0 +1,66 @@
+// 183 — manifest -> Spec -> Supervisor wiring. Proves the declarative manifest drives the process
+// runner: toSpec maps every field the supervisor needs, the supervisor keeps replicas.min running, and
+// a rescale (what the control-plane autoscaler will drive within [min,max]) tops up / trims correctly.
+// Simulated supervisor (virtual replicas): no real binaries, no timing races.
+import assert;
+import string;
+import orch.manifest;
+import orch.supervisor;
+
+fn publicYaml(): string {
+    return "metadata:\n  name: shop\n" +
+           "workload:\n  binary: ./bin/webapp\n  args:\n    - --config\n    - prod\n  restartPolicy: always\n" +
+           "replicas:\n  min: 3\n  max: 6\n" +
+           "network:\n  expose: public\n  portBase: 8080\n  portFlag: --port\n" +
+           "health:\n  path: /healthz\n  intervalMs: 1500\n" +
+           "resources:\n  cpuMilli: 500\n  memMaxBytes: 268435456\n  pidsMax: 128\n";
+}
+
+@test
+fn test_toSpec_maps_manifest_fields(): void {
+    let m = manifest.parseManifest(publicYaml());
+    let s = manifest.toSpec(m);
+    assert.equalStr(s.name, "shop");
+    assert.equalStr(s.binaryPath, "./bin/webapp");
+    assert.equalInt(s.args.size(), 2);
+    assert.equalStr(s.args.get(0) ?? "", "--config");
+    assert.equalStr(s.restartPolicy, "always");
+    assert.equalInt(s.replicas, 3);                 // initial desired = replicas.min
+    assert.equalInt(s.cpuMilli, 500);
+    assert.isTrue(s.memMaxBytes == (268435456 as long));
+    assert.equalInt(s.pidsMax, 128);
+    assert.equalStr(s.probePath, "/healthz");
+    assert.equalInt(s.probePeriodMs, 1500);
+    // public exposure => port config flows through
+    assert.equalInt(s.basePort, 8080);
+    assert.equalStr(s.portFlag, "--port");
+    assert.equalInt(s.probePort, 8080);
+}
+
+@test
+fn test_gateway_only_is_not_exposed(): void {
+    // A gateway-only app (default) has NO host port — reached via the gateway (handoff/veth).
+    let m = manifest.parseManifest("metadata:\n  name: api\nworkload:\n  binary: /bin/api\nreplicas:\n  min: 2\n  max: 4\n");
+    let s = manifest.toSpec(m);
+    assert.equalInt(s.replicas, 2);
+    assert.equalInt(s.basePort, 0);                 // not directly exposed
+    assert.equalStr(s.portFlag, "");
+}
+
+@test
+fn test_supervisor_runs_from_manifest_and_rescales(): void {
+    let s = manifest.toSpec(manifest.parseManifest(publicYaml()));
+    let sup = supervisor.Supervisor(s);
+    sup.simulated = true;
+    sup.start();
+    assert.equalInt(sup.running(), 3);              // keeps replicas.min
+
+    // Autoscaler drives spec.replicas within [min,max]; ensureReplicas actuates it.
+    s.replicas = 6;
+    sup.ensureReplicas();
+    assert.equalInt(sup.running(), 6);              // scaled up to max
+
+    s.replicas = 2;
+    sup.ensureReplicas();
+    assert.equalInt(sup.running(), 2);              // scaled down
+}
