@@ -3,7 +3,7 @@
 // SqlConfigStore is the async, SQL-backed sibling of the in-memory ConfigStore (store/config.nova): same
 // etcd-shaped semantics (monotonic global revision, per-key mod-revision, prefix list, CAS on revision,
 // delete, watch-since), but persisted through the async data.db seam (trait Connection) so it runs over
-// the nova-btreedb driver against a live server. ConfigStore stays the offline reference/oracle; this is
+// the nova-novadb driver against a live server. ConfigStore stays the offline reference/oracle; this is
 // the path the orchestrator actually reconciles from once a DB is attached.
 //
 // Storage model (two tables):
