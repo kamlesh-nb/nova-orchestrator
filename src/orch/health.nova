@@ -68,6 +68,7 @@ pub struct HealthReport {
         if (!self.storeReachable) { return false; }
         if (string.eql(self.role, "leader")) { return true; }
         if (string.eql(self.role, "standby")) { return true; }
+        if (string.eql(self.role, "standalone")) { return true; }   // a non-HA node is ready on its own
         return false;
     }
 
@@ -84,6 +85,13 @@ pub struct HealthReport {
 fn boolMetric(b: bool): string {
     if (b) { return "1"; }
     return "0";
+}
+
+// A self-health report for a STANDALONE (non-HA) node: no lease, so role="standalone" (which ready()
+// treats as ready), the store is assumed reachable, and the workload gauges come straight from the
+// nativelet. orchd uses this to publish /metrics + evaluate alerts without a config store or a lease.
+pub fn standaloneReport(n: nativelet.Nativelet): HealthReport {
+    return HealthReport("standalone", 0, "", true, n.jobs.size(), n.totalRunning(), n.underProvisioned(), 0, 0);
 }
 
 // Render Prometheus exposition text: node gauges + one line per workload (statuses = Nativelet.status(),
