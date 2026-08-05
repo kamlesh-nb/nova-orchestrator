@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Run the LIVE integration tests (tests/live/*.nova) against a fresh BTreeDB server. Unlike run-tests.sh
-# (offline, no server), these connect to a real btree on 127.0.0.1:3009. Requires the btree repo built
-# beside the lang toolchain (btree/zig-out/bin/btree) and `nova` on PATH.
+# MANUAL ONLY -- NOT A MERGE GATE. Run the LIVE integration tests (tests/live/*.nova) against a fresh NovaDB
+# server. Unlike run-tests.sh (offline, deterministic, the GATE), these connect to a real btree on
+# 127.0.0.1:3009 and are timing-sensitive; they confirm behaviour but never gate a merge. Their guarantees
+# have deterministic equivalents in run-tests.sh (188 lease, O2 198_ha_cluster) -- see ../../TEST-STRATEGY.md.
+# Requires the btree repo built beside the lang toolchain (btree/zig-out/bin/btree) and `nova` on PATH.
 set -u
 here="$(cd "$(dirname "$0")" && pwd)"
 lang="$here/../../lang"
