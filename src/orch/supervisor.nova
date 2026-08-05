@@ -13,6 +13,7 @@ import string;
 import orch.spec;
 import orch.isolation;
 import os.sandbox;
+import net.netns;
 
 pub struct Supervisor {
     pub spec: spec.Spec,
@@ -21,6 +22,9 @@ pub struct Supervisor {
     // spec.portFlag is set, each replica is spawned with a DISTINCT port from [basePort, ...] so the
     // endpoints orchd advertises are actually served. Kept in lockstep with procs on spawn/reap/kill.
     pub ports: list.List<int>,
+    // Per-replica netns /30 slot (parallel to procs; empty unless spec.netns). Each live replica owns a
+    // network namespace + veth pair identified by its slot; kept in lockstep with procs on spawn/kill.
+    pub netnsSlots: list.List<int>,
     // Rolling count of restarts performed (observability / test signal).
     pub restarts: int,
     // When false (tests), the lifecycle methods manipulate no real processes — they no-op so the pure
@@ -36,6 +40,7 @@ pub struct Supervisor {
         self.spec = sp;
         self.procs = list.List<process.Process>();
         self.ports = list.List<int>();
+        self.netnsSlots = list.List<int>();
         self.restarts = 0;
         self.manageProcesses = true;
         self.simulated = false;
@@ -60,6 +65,22 @@ pub struct Supervisor {
         return p;
     }
 
+    fn slotInUse(self: Supervisor, s: int): bool {
+        let i = 0;
+        while (i < self.netnsSlots.size()) {
+            if ((self.netnsSlots.get(i) ?? -1) == s) { return true; }
+            i = i + 1;
+        }
+        return false;
+    }
+    // Lowest netns /30 slot at/above netnsBase not held by a live replica (reclaims a freed slot after a
+    // middle death, like nextFreePort). Each replica gets its own namespace + /30.
+    fn nextFreeNetnsSlot(self: Supervisor): int {
+        let s = self.spec.netnsBase;
+        while (self.slotInUse(s)) { s = s + 1; }
+        return s;
+    }
+
     fn spawnOne(self: Supervisor): void {
         if (self.simulated) {
             self.simReplicas.push(-2);                 // a fresh running virtual replica
@@ -67,6 +88,32 @@ pub struct Supervisor {
             return;
         }
         if (!self.manageProcesses) { return; }
+
+        // netns isolation (Linux gateway-only): each replica runs in its own network namespace behind a
+        // veth pair and binds the SAME basePort on its private address, so replicas need no distinct host
+        // port. Launch the binary INSIDE the namespace via `ip netns exec` (netns.wrapExec). On non-Linux
+        // netns.setup is a no-op and this path should not be selected (toSpec only sets netns on Linux).
+        if (self.spec.netns) {
+            let slot = self.nextFreeNetnsSlot();
+            let plan = netns.plan(self.spec.name, slot);
+            let _ = netns.teardown(plan);              // clear any stale namespace from a prior run
+            let _ = netns.setup(plan);
+            let nargs = list.List<string>();
+            let j = 0;
+            while (j < self.spec.args.size()) { nargs.push(self.spec.args.get(j) ?? ""); j = j + 1; }
+            if (self.spec.basePort > 0 && !string.eql(self.spec.portFlag, "")) {
+                nargs.push(self.spec.portFlag);
+                nargs.push(`${self.spec.basePort}`);
+            }
+            let cmdArgs = netns.wrapExec(plan, self.spec.binaryPath, nargs);
+            let np = process.Process.spawn("ip", cmdArgs);
+            let _ = isolation.applyLimits(self.spec, np.pid());
+            self.procs.push(np);
+            self.ports.push(self.spec.basePort);       // every replica shares basePort (disjoint netns)
+            self.netnsSlots.push(slot);
+            return;
+        }
+
         let port = self.nextFreePort();
         // Build argv: the spec args plus the assigned port flag when this workload is directly exposed.
         let args = self.spec.args;
@@ -122,6 +169,12 @@ pub struct Supervisor {
         }
         self.procs.remove(idx);
         if (idx < self.ports.size()) { self.ports.remove(idx); }
+        // Tear down this replica's network namespace + veth (netns mode; no-op off Linux).
+        if (self.spec.netns && idx < self.netnsSlots.size()) {
+            let slot = self.netnsSlots.get(idx) ?? -1;
+            if (slot >= 0 && self.manageProcesses) { let _ = netns.teardown(netns.plan(self.spec.name, slot)); }
+            self.netnsSlots.remove(idx);
+        }
     }
 
     // Bring the running replica count to spec.replicas (spawn up, stop down). Called on start and on any
@@ -225,6 +278,21 @@ pub struct Supervisor {
     // The service endpoints this workload ADVERTISES on `host` -- the desired topology (pure; see
     // spec.serviceEndpoints). orchd publishes these to the discovery file; service health-checks liveness.
     pub fn advertisedEndpoints(self: Supervisor, host: string): list.List<string> {
+        // netns mode: each replica is reachable at its PRIVATE veth address (10.66.<slot>.2) on basePort,
+        // regardless of `host` — the gateway is on the same node and forwards to those addresses.
+        if (self.spec.netns) {
+            let out = list.List<string>();
+            let i = 0;
+            while (i < self.netnsSlots.size()) {
+                let slot = self.netnsSlots.get(i) ?? -1;
+                if (slot >= 0) {
+                    let plan = netns.plan(self.spec.name, slot);
+                    out.push(`${plan.appIp}:${self.spec.basePort}`);
+                }
+                i = i + 1;
+            }
+            return out;
+        }
         return spec.serviceEndpoints(self.spec, host);
     }
 }

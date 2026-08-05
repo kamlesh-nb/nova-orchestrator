@@ -213,11 +213,21 @@ pub fn toSpec(m: Manifest): spec.Spec {
     s.pidsMax = m.resources.pidsMax;
     s.probePath = m.health.path;
     s.probePeriodMs = if (m.health.intervalMs > 0) m.health.intervalMs else 2000;
-    if (string.eql(m.network.expose, "public") && m.network.portBase > 0) {
+    let mode = isolationMode(m);
+    if (string.eql(mode, "public") && m.network.portBase > 0) {
+        // Directly exposed: each replica binds a DISTINCT host port [portBase, ...].
         s.basePort = m.network.portBase;
         s.portFlag = m.network.portFlag;
         s.probePort = m.network.portBase;
+    } else if (string.eql(mode, "netns")) {
+        // Linux gateway-only: each replica runs in its own netns and binds the SAME port on its private
+        // address; the supervisor advertises the private addresses. Port defaults to 8080 if unset.
+        s.netns = true;
+        s.basePort = if (m.network.portBase > 0) m.network.portBase else 8080;
+        s.portFlag = if (!string.eql(m.network.portFlag, "")) m.network.portFlag else "--port";
+        s.probePort = s.basePort;
     }
+    // handoff (mac/win) and loopback leave basePort 0 — the app is reached via the gateway, not a port.
     return s;
 }
 

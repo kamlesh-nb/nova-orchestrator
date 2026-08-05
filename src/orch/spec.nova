@@ -35,6 +35,13 @@ pub struct Spec {
     // probePort if any, shared via SO_REUSEPORT).
     pub basePort: int,
     pub portFlag: string,
+    // Linux network-namespace + veth isolation (gateway-only apps). When true, each replica runs in its
+    // own netns (see net/netns) behind a veth pair and binds `basePort` on its PRIVATE address (so all
+    // replicas share the same port in disjoint namespaces); the supervisor advertises each replica's
+    // private netns address instead of a host port. `netnsBase` is the first /30 slot on this node
+    // (replica i takes a free slot from there). No-op off Linux — the caller uses fd-handoff instead.
+    pub netns: bool,
+    pub netnsBase: int,
     init(name: string, binaryPath: string) {
         self.name = name;
         self.binaryPath = binaryPath;
@@ -51,6 +58,8 @@ pub struct Spec {
         self.rootfs = "";
         self.basePort = 0;
         self.portFlag = "";
+        self.netns = false;
+        self.netnsBase = 0;
     }
 }
 

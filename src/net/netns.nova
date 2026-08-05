@@ -48,10 +48,12 @@ pub struct NetPlan {
     }
 }
 
-// Compute the plan for app `name` at slot `idx` (0..). Pure — no side effects, testable anywhere.
+// Compute the plan for app `name` at node-unique slot `idx` (0..). Each REPLICA gets its own slot, so
+// its own namespace + /30 (replicas of one app can then all bind the same port on their private
+// address). Pure — no side effects, testable anywhere.
 pub fn plan(name: string, idx: int): NetPlan {
     let base = `10.66.${idx}.`;
-    return NetPlan(name, `nova-${name}`, `nvh${idx}`, `nva${idx}`, base + "1", base + "2");
+    return NetPlan(name, `nova-${name}-${idx}`, `nvh${idx}`, `nva${idx}`, base + "1", base + "2");
 }
 
 // Is Linux network-namespace isolation usable here? Linux + an `ip` binary on a standard path. (Root /

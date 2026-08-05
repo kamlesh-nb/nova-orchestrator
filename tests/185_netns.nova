@@ -7,6 +7,8 @@ import list;
 import platform;
 import net.netns;
 import orch.manifest;
+import orch.spec;
+import orch.supervisor;
 
 fn join(a: list.List<string>): string {
     let out = "";
@@ -22,7 +24,7 @@ fn join(a: list.List<string>): string {
 @test
 fn test_plan_addressing(): void {
     let p = netns.plan("shop", 0);
-    assert.equalStr(p.netns, "nova-shop");
+    assert.equalStr(p.netns, "nova-shop-0");
     assert.equalStr(p.hostIf, "nvh0");
     assert.equalStr(p.appIf, "nva0");
     assert.equalStr(p.hostIp, "10.66.0.1");   // gateway reaches the app through this
@@ -30,7 +32,7 @@ fn test_plan_addressing(): void {
     assert.equalInt(p.prefixLen, 30);
     // a second slot gets a disjoint /30
     let q = netns.plan("api", 5);
-    assert.equalStr(q.netns, "nova-api");
+    assert.equalStr(q.netns, "nova-api-5");
     assert.equalStr(q.hostIp, "10.66.5.1");
     assert.equalStr(q.appIp, "10.66.5.2");
 }
@@ -40,13 +42,13 @@ fn test_setup_command_recipe(): void {
     let p = netns.plan("shop", 0);
     let c = netns.setupCommands(p);
     assert.equalInt(c.size(), 9);
-    assert.equalStr(join(c.get(0) ?? list.List<string>()), "netns add nova-shop");
+    assert.equalStr(join(c.get(0) ?? list.List<string>()), "netns add nova-shop-0");
     assert.equalStr(join(c.get(1) ?? list.List<string>()), "link add nvh0 type veth peer name nva0");
-    assert.equalStr(join(c.get(2) ?? list.List<string>()), "link set nva0 netns nova-shop");
+    assert.equalStr(join(c.get(2) ?? list.List<string>()), "link set nva0 netns nova-shop-0");
     assert.equalStr(join(c.get(3) ?? list.List<string>()), "addr add 10.66.0.1/30 dev nvh0");
     assert.equalStr(join(c.get(4) ?? list.List<string>()), "link set nvh0 up");
-    assert.equalStr(join(c.get(5) ?? list.List<string>()), "-n nova-shop addr add 10.66.0.2/30 dev nva0");
-    assert.equalStr(join(c.get(8) ?? list.List<string>()), "-n nova-shop route add default via 10.66.0.1");
+    assert.equalStr(join(c.get(5) ?? list.List<string>()), "-n nova-shop-0 addr add 10.66.0.2/30 dev nva0");
+    assert.equalStr(join(c.get(8) ?? list.List<string>()), "-n nova-shop-0 route add default via 10.66.0.1");
 }
 
 @test
@@ -55,17 +57,17 @@ fn test_teardown_recipe(): void {
     let c = netns.teardownCommands(p);
     assert.equalInt(c.size(), 2);
     assert.equalStr(join(c.get(0) ?? list.List<string>()), "link del nvh0");
-    assert.equalStr(join(c.get(1) ?? list.List<string>()), "netns del nova-shop");
+    assert.equalStr(join(c.get(1) ?? list.List<string>()), "netns del nova-shop-0");
 }
 
 @test
 fn test_exec_wrapping(): void {
     let p = netns.plan("shop", 0);
-    assert.equalStr(join(netns.execPrefix(p)), "netns exec nova-shop");
+    assert.equalStr(join(netns.execPrefix(p)), "netns exec nova-shop-0");
     let args = list.List<string>();
     args.push("--port"); args.push("0");
     // spawn "ip" with these args => runs /bin/webapp inside the app namespace
-    assert.equalStr(join(netns.wrapExec(p, "/bin/webapp", args)), "netns exec nova-shop /bin/webapp --port 0");
+    assert.equalStr(join(netns.wrapExec(p, "/bin/webapp", args)), "netns exec nova-shop-0 /bin/webapp --port 0");
 }
 
 @test
@@ -77,6 +79,23 @@ fn test_availability_is_platform_gated(): void {
         assert.isTrue(!netns.available());
         assert.equalInt(netns.setup(netns.plan("x", 0)), -1);
     }
+}
+
+@test
+fn test_supervisor_advertises_netns_addresses(): void {
+    // In netns mode the supervisor advertises each replica's PRIVATE veth address:basePort (what the
+    // gateway forwards to), not a host port. Drive it directly by seeding the per-replica slots that
+    // spawnOne would record (real spawn needs Linux; the advertisement computation is pure).
+    let s = spec.Spec("shop", "/bin/webapp");
+    s.netns = true;
+    s.basePort = 8080;
+    let sup = supervisor.Supervisor(s);
+    sup.netnsSlots.push(0);
+    sup.netnsSlots.push(1);
+    let eps = sup.advertisedEndpoints("ignored-host");
+    assert.equalInt(eps.size(), 2);
+    assert.equalStr(eps.get(0) ?? "", "10.66.0.2:8080");
+    assert.equalStr(eps.get(1) ?? "", "10.66.1.2:8080");
 }
 
 @test
