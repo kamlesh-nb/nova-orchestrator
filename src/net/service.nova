@@ -120,3 +120,24 @@ pub fn resolveFrom(registryFile: string, name: string): string {
     }
     return "";
 }
+
+// Resolve ALL endpoints registered under `name` -- one per matching `name=host:port` line. This is the
+// multi-replica form of resolveFrom: orchd advertises every replica endpoint of a service as a separate
+// line, and proxyd builds its whole backend pool from them. Returns an empty list when the file or the
+// name is absent. Caller owns the list.
+pub fn resolveAllFrom(registryFile: string, name: string): list.List<string> {
+    let out = list.List<string>();
+    if (!file.File.exists(registryFile)) { return out; }
+    let text = file.File.readText(registryFile);
+    let needle = name + "=";
+    let lines = string.split(text, "\n");
+    let i = 0;
+    while (i < lines.size()) {
+        let ln = lines.get(i) ?? "";
+        if (string.startsWith(ln, needle)) {
+            out.push(string.slice(ln, string.len(needle), string.len(ln)));
+        }
+        i = i + 1;
+    }
+    return out;
+}

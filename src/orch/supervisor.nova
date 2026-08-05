@@ -17,6 +17,10 @@ import os.sandbox;
 pub struct Supervisor {
     pub spec: spec.Spec,
     pub procs: list.List<process.Process>,  // live replica processes
+    // Port assigned to each live replica (parallel to procs; -1 = none). When spec.basePort > 0 and
+    // spec.portFlag is set, each replica is spawned with a DISTINCT port from [basePort, ...] so the
+    // endpoints orchd advertises are actually served. Kept in lockstep with procs on spawn/reap/kill.
+    pub ports: list.List<int>,
     // Rolling count of restarts performed (observability / test signal).
     pub restarts: int,
     // When false (tests), the lifecycle methods manipulate no real processes — they no-op so the pure
@@ -25,23 +29,53 @@ pub struct Supervisor {
     init(sp: spec.Spec) {
         self.spec = sp;
         self.procs = list.List<process.Process>();
+        self.ports = list.List<int>();
         self.restarts = 0;
         self.manageProcesses = true;
     }
 
+    fn portInUse(self: Supervisor, p: int): bool {
+        let i = 0;
+        while (i < self.ports.size()) {
+            if ((self.ports.get(i) ?? -1) == p) { return true; }
+            i = i + 1;
+        }
+        return false;
+    }
+
+    // Lowest port at/above basePort not currently assigned to a live replica (so a replica restarted after
+    // a middle death reclaims the freed port instead of colliding with a survivor). -1 when not exposed.
+    fn nextFreePort(self: Supervisor): int {
+        if (self.spec.basePort <= 0 || string.eql(self.spec.portFlag, "")) { return -1; }
+        let p = self.spec.basePort;
+        while (self.portInUse(p)) { p = p + 1; }
+        return p;
+    }
+
     fn spawnOne(self: Supervisor): void {
         if (!self.manageProcesses) { return; }
+        let port = self.nextFreePort();
+        // Build argv: the spec args plus the assigned port flag when this workload is directly exposed.
+        let args = self.spec.args;
+        if (port >= 0) {
+            args = list.List<string>();
+            let i = 0;
+            while (i < self.spec.args.size()) { args.push(self.spec.args.get(i) ?? ""); i = i + 1; }
+            args.push(self.spec.portFlag);
+            args.push(`${port}`);
+        }
         // I4: isolationLevel>0 clone()s the child into namespaces + rootfs + dropped caps (+ seccomp at
         // level 3); level 0 is a plain spawn. Linux-only — degrades to a plain spawn elsewhere.
         let p = if (self.spec.isolationLevel <= 0)
-                    process.Process.spawn(self.spec.binaryPath, self.spec.args)
+                    process.Process.spawn(self.spec.binaryPath, args)
                 else if (self.spec.isolationLevel >= 3)
-                    sandbox.spawn(self.spec.binaryPath, self.spec.args, sandbox.level3(self.spec.rootfs, self.spec.name))
+                    sandbox.spawn(self.spec.binaryPath, args, sandbox.level3(self.spec.rootfs, self.spec.name))
                 else
-                    sandbox.spawn(self.spec.binaryPath, self.spec.args, sandbox.level1(self.spec.rootfs, self.spec.name));
+                    sandbox.spawn(self.spec.binaryPath, args, sandbox.level1(self.spec.rootfs, self.spec.name));
         // Apply cgroups-v2 limits (Linux; best-effort no-op elsewhere) to the freshly-spawned child.
         let _ = isolation.applyLimits(self.spec, p.pid());
         self.procs.push(p);
+        self.ports.push(port);
     }
 
     // SIGTERM a replica, give it a brief grace window (polling for exit), then SIGKILL if still alive,
@@ -67,6 +101,7 @@ pub struct Supervisor {
             self.stopProc(p);
         }
         self.procs.remove(idx);
+        if (idx < self.ports.size()) { self.ports.remove(idx); }
     }
 
     // Bring the running replica count to spec.replicas (spawn up, stop down). Called on start and on any
@@ -92,9 +127,10 @@ pub struct Supervisor {
             if (st == -2) {
                 i = i + 1;                       // still running
             } else {
-                // exited (st = code) or errored (-1) → reap + drop this slot
+                // exited (st = code) or errored (-1) → reap + drop this slot (and free its port)
                 p.close();
                 self.procs.remove(i);
+                if (i < self.ports.size()) { self.ports.remove(i); }
                 if (spec.shouldRestart(self.spec.restartPolicy, st)) {
                     self.spawnOne();             // replace (pushed at the end; don't advance i)
                     self.restarts = self.restarts + 1;
@@ -111,7 +147,14 @@ pub struct Supervisor {
         } else {
             while (self.procs.size() > 0) { self.procs.remove(self.procs.size() - 1); }
         }
+        while (self.ports.size() > 0) { self.ports.remove(self.ports.size() - 1); }
     }
 
     pub fn running(self: Supervisor): int { return self.procs.size(); }
+
+    // The service endpoints this workload ADVERTISES on `host` -- the desired topology (pure; see
+    // spec.serviceEndpoints). orchd publishes these to the discovery file; proxyd health-checks liveness.
+    pub fn advertisedEndpoints(self: Supervisor, host: string): list.List<string> {
+        return spec.serviceEndpoints(self.spec, host);
+    }
 }

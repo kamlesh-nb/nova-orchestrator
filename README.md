@@ -30,8 +30,21 @@ half of the package through the import graph, so dead-code elimination keeps the
 | **`orchd`**  | control | desired state: manifest reconcile, replica supervision, restart policy, isolation, leader lease, config store | `orch.*`, `store.*`, `os.sandbox` |
 
 They share no process and forward nothing to each other directly. The **only** coupling is a
-service-discovery file: `orchd` publishes live endpoints, `proxyd` reads them (`net.service.resolveFrom`)
-and load-balances across them. Either can run and be restarted independently.
+service-discovery file, and it is fully wired:
+
+- `orchd` publishes, every reconcile tick, one `name=host:port` line per replica of each workload it
+  manages (`Nativelet.publishDiscovery`). A workload exposes replica endpoints by setting
+  `"service": { "basePort": 9000, "portFlag": "--port" }` in its manifest: replica *i* is spawned on
+  `basePort + i` (the port passed via `portFlag`) and advertised on `advertiseHost`. A workload with no
+  `basePort` advertises its single shared `probe.port` instead.
+- `proxyd` resolves **all** endpoints for its `discoveryService` from that file
+  (`net.service.resolveAllFrom`) into its backend pool, and its active health checks prune any advertised
+  endpoint that is not actually serving yet. So the control plane advertises the desired topology and the
+  data plane owns liveness.
+
+Either can run and be restarted independently. End to end: `orchd` writes
+`web=127.0.0.1:9000` / `web=127.0.0.1:9001`; a `proxyd` whose config sets `discoveryService: "web"` then
+load-balances across both replicas.
 
 Each reads a **validated JSON config** (a missing file falls back to documented defaults; a present file
 with a bad value fails loudly at startup, never silently defaults):

@@ -71,10 +71,43 @@ pub struct Nativelet {
     pub jobs: list.List<Job>,
     // Propagated to every Supervisor: false in tests so reconcile logic runs without spawning binaries.
     pub manageProcesses: bool,
+    // Control->data plane seam: when discoveryFile != "", each reconcile tick publishes every workload's
+    // advertised service endpoints (on advertiseHost) to that file, one `name=host:port` line per replica,
+    // for proxyd to resolve (net.service.resolveAllFrom). "" disables publication.
+    pub discoveryFile: string,
+    pub advertiseHost: string,
     init(manifestsDir: string) {
         self.manifestsDir = manifestsDir;
         self.jobs = list.List<Job>();
         self.manageProcesses = true;
+        self.discoveryFile = "";
+        self.advertiseHost = "127.0.0.1";
+    }
+
+    // Render the service-discovery file contents from the current jobs: one `name=host:port` line per
+    // advertised replica endpoint, workloads in reconcile order. Pure (no I/O), so it is unit-testable.
+    pub fn renderDiscovery(self: Nativelet): string {
+        let out = "";
+        let j = 0;
+        while (j < self.jobs.size()) {
+            let job = self.jobs.get(j) ?? Job("", supervisor.Supervisor(spec.Spec("", "")), spec.Spec("", ""));
+            let eps = job.sup.advertisedEndpoints(self.advertiseHost);
+            let k = 0;
+            while (k < eps.size()) {
+                out = out + job.name + "=" + (eps.get(k) ?? "") + "\n";
+                k = k + 1;
+            }
+            j = j + 1;
+        }
+        return out;
+    }
+
+    // Write the discovery file atomically-ish (single writeText) when publication is enabled. Called each
+    // reconcile tick by run(); a workload added/removed/rescaled shows up on the next tick, and proxyd's
+    // active health checks prune any advertised endpoint that is not actually serving yet.
+    pub fn publishDiscovery(self: Nativelet): void {
+        if (string.eql(self.discoveryFile, "")) { return; }
+        file.File.writeText(self.discoveryFile, self.renderDiscovery());
     }
 
     pub fn findJobIdx(self: Nativelet, name: string): int {   // index or -1
@@ -335,6 +368,9 @@ fn nameIn(names: list.List<string>, target: string): bool {
 pub async fn run(n: Nativelet, intervalMs: int): int {
     while (true) {
         n.reconcile();
+        // Advertise the desired endpoints BEFORE the probes: publication reflects the reconciled topology
+        // and must not wait on (or be blocked by) a slow/failing health probe. No-op unless discoveryFile set.
+        n.publishDiscovery();
         let _ = await n.probeAndHeal();
         let _ = await aio.sleep(intervalMs);
     }

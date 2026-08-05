@@ -26,11 +26,15 @@ fn main(): int {
         return 0;
     }
 
-    console.log(`orchd: node=${c.nodeId} reconcile=${c.reconcileMs}ms manifests=${c.manifestsDir}`);
+    let disc = if (string.eql(c.discoveryFile, "")) "off" else c.discoveryFile;
+    console.log(`orchd: node=${c.nodeId} reconcile=${c.reconcileMs}ms manifests=${c.manifestsDir} discovery=${disc}`);
     // holdReactors before the block-drive (the reconcile loop's async probes need live reactors), then
     // run the reconcile loop forever. nativelet.run is async; calling it from sync main() block-drives it.
     aio.holdReactors();
     let n = nativelet.Nativelet(c.manifestsDir);
+    // Publish live service endpoints for proxyd to load-balance across (no-op unless discoveryFile is set).
+    n.discoveryFile = c.discoveryFile;
+    n.advertiseHost = c.advertiseHost;
     let _ = nativelet.run(n, c.reconcileMs);
     return 0;
 }

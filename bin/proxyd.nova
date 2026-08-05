@@ -21,16 +21,24 @@ fn strategyOf(s: string): proxy.LbStrategy {
     return proxy.LbStrategy.RoundRobin;
 }
 
-// Add the endpoint advertised in the discovery file (written by orchd's ServiceRegistry), if present.
-fn addDiscovered(pool: proxy.Pool, discoveryFile: string, svc: string): void {
-    if (string.eql(discoveryFile, "")) { return; }
-    let ep = service.resolveFrom(discoveryFile, svc);
-    if (string.eql(ep, "")) { return; }
-    let hp = string.split(ep, ":");
-    if (hp.size() < 2) { return; }
-    let host = hp.get(0) ?? "";
-    let port = string.parseI64(hp.get(1) ?? "0") as int;
-    if (!string.eql(host, "") && port > 0) { pool.add(host, port); }
+// Add EVERY endpoint advertised for the service in the discovery file (written by orchd each reconcile
+// tick), so the pool tracks all replicas the control plane manages. Active health checks then prune any
+// that are not actually serving yet. Returns how many backends were added.
+fn addDiscovered(pool: proxy.Pool, discoveryFile: string, svc: string): int {
+    if (string.eql(discoveryFile, "")) { return 0; }
+    let eps = service.resolveAllFrom(discoveryFile, svc);
+    let added = 0;
+    let i = 0;
+    while (i < eps.size()) {
+        let hp = string.split(eps.get(i) ?? "", ":");
+        if (hp.size() >= 2) {
+            let host = hp.get(0) ?? "";
+            let port = string.parseI64(hp.get(1) ?? "0") as int;
+            if (!string.eql(host, "") && port > 0) { pool.add(host, port); added = added + 1; }
+        }
+        i = i + 1;
+    }
+    return added;
 }
 
 fn main(): int {
@@ -59,7 +67,7 @@ fn main(): int {
         pool.addWeighted(b.host, b.port, b.weight);
         i = i + 1;
     }
-    addDiscovered(pool, c.discoveryFile, c.discoveryService);
+    let _ = addDiscovered(pool, c.discoveryFile, c.discoveryService);
 
     if (pool.size() == 0) {
         console.log("proxyd: no live backends (static + discovery both empty); refusing to start");

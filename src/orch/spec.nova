@@ -28,6 +28,13 @@ pub struct Spec {
     // degrades to a plain spawn elsewhere. `rootfs` = the private root to pivot into ("" = host FS).
     pub isolationLevel: int,
     pub rootfs: string,
+    // Service exposure (the control->data plane seam). When basePort > 0, replica i listens on
+    // basePort + i and the supervisor passes that port via `portFlag` (e.g. "--port") on spawn; orchd
+    // then ADVERTISES host:basePort .. host:(basePort+replicas-1) as the workload's service endpoints for
+    // proxyd to load-balance across. basePort == 0 means "not directly exposed" (advertise the single
+    // probePort if any, shared via SO_REUSEPORT).
+    pub basePort: int,
+    pub portFlag: string,
     init(name: string, binaryPath: string) {
         self.name = name;
         self.binaryPath = binaryPath;
@@ -42,6 +49,8 @@ pub struct Spec {
         self.probePeriodMs = 2000;
         self.isolationLevel = 0;
         self.rootfs = "";
+        self.basePort = 0;
+        self.portFlag = "";
     }
 }
 
@@ -83,7 +92,33 @@ pub fn parseSpec(text: string): Spec {
         s.probePath = json.asString(json.get(pr, "path")) ?? "/healthz";
         s.probePeriodMs = (json.asNumber(json.get(pr, "periodMs")) ?? 2000) as int;
     }
+
+    // Service exposure: { "service": { "basePort": 9000, "portFlag": "--port" } }
+    if (json.has(root, "service")) {
+        let sv = json.get(root, "service");
+        s.basePort = (json.asNumber(json.get(sv, "basePort")) ?? 0) as int;
+        s.portFlag = json.asString(json.get(sv, "portFlag")) ?? "";
+    }
     return s;
+}
+
+// The service endpoints a workload ADVERTISES on `host`: one per replica at basePort + i when directly
+// exposed (basePort > 0), else the single shared probePort (SO_REUSEPORT) if any, else none. Pure and
+// deterministic (independent of how many replicas are live right now) -- the CONTROL plane advertises the
+// desired topology; the data plane (proxyd) health-checks which of them are actually up. Callers own the list.
+pub fn serviceEndpoints(s: Spec, host: string): List<string> {
+    let out = List<string>();
+    if (s.basePort > 0) {
+        let i = 0;
+        while (i < s.replicas) {
+            let p = s.basePort + i;
+            out.push(`${host}:${p}`);
+            i = i + 1;
+        }
+    } else if (s.probePort > 0) {
+        out.push(`${host}:${s.probePort}`);
+    }
+    return out;
 }
 
 // Validate a PARSED spec before the reconcile loop is allowed to apply it (P4 rollout safety). parseSpec

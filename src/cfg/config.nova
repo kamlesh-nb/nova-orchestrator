@@ -167,11 +167,13 @@ pub struct OrchConfig {
     pub nodeId: string,              // this node's identity (leader lease + logging)
     // Optional service-discovery publication: the endpoints orchd advertises for proxyd to consume.
     pub discoveryFile: string,       // "" = do not publish
+    pub advertiseHost: string,       // host proxyd should reach the replicas on (published in the file)
     init() {
         self.manifestsDir = "manifests";
         self.reconcileMs = 2000;
         self.nodeId = "node-1";
         self.discoveryFile = "";
+        self.advertiseHost = "127.0.0.1";
     }
 }
 
@@ -183,6 +185,7 @@ pub fn loadOrchConfig(path: string): OrchConfig {
     c.reconcileMs = (json.asNumber(json.get(root, "reconcileMs")) ?? (c.reconcileMs as long)) as int;
     c.nodeId = json.asString(json.get(root, "nodeId")) ?? c.nodeId;
     c.discoveryFile = json.asString(json.get(root, "discoveryFile")) ?? c.discoveryFile;
+    c.advertiseHost = json.asString(json.get(root, "advertiseHost")) ?? c.advertiseHost;
     return c;
 }
 
