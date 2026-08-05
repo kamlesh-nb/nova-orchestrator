@@ -43,18 +43,27 @@ fn main(): int {
     let pe = env.get("NOVA_PORT");
     if (!string.eql(pe, "")) { c.listenPort = string.parseI64(pe) as int; }
 
-    // fd-passing handoff mode (out-of-path, L4-style): when NOVA_HANDOFF_SOCK is set, the service binds
-    // that AF_UNIX rendezvous and hands accepted client sockets to backend apps that connect to it,
-    // instead of forwarding bytes to a static/discovered backend Pool. No backends config is needed (apps
-    // register themselves), so this bypasses pool building and the empty-pool guard. Same-host only.
-    let handoff = env.get("NOVA_HANDOFF_SOCK");
-    if (!string.eql(handoff, "")) {
+    // fd-passing handoff mode (out-of-path, L4-style): the service binds an AF_UNIX rendezvous and hands
+    // accepted client sockets to backend apps that connect to it, instead of forwarding bytes to a
+    // backend Pool. HANDOFF IS THE DEFAULT: it is used whenever an explicit NOVA_HANDOFF_SOCK is set, OR
+    // when no static/discovery backends are configured (a bare `service`). Classic byte-forwarding L7 is
+    // the fallback ONLY when backends are configured. Same-host only; a specific rendezvous path can be
+    // set with NOVA_HANDOFF_SOCK (default /tmp/nova-service.sock).
+    // Handoff is the default: use it when NOVA_HANDOFF_SOCK is set OR when the config declares no classic
+    // backends (no static list and no discovery file). Classic byte-forwarding L7 is used only when
+    // backends ARE configured. This decision precedes validateProxy, whose "backends required" rule
+    // applies to classic mode only.
+    let handoffEnv = env.get("NOVA_HANDOFF_SOCK");
+    let noBackends = c.backends.size() == 0 && string.eql(c.discoveryFile, "");
+    if (!string.eql(handoffEnv, "") || noBackends) {
+        let sock = if (!string.eql(handoffEnv, "")) handoffEnv else "/tmp/nova-service.sock";
+        let why = if (!string.eql(handoffEnv, "")) "" else " — default: no static backends";
         if (config.hasFlag("--check")) {
-            console.log(`service: config OK (handoff mode, socket ${handoff}, port ${c.listenPort})`);
+            console.log(`service: config OK (fd-handoff via ${sock}, port ${c.listenPort}${why})`);
             return 0;
         }
-        console.log(`service: listening on *:${c.listenPort} (fd-handoff via ${handoff})`);
-        proxy.serveHandoffOnReactor(c.listenPort, handoff, c.timeoutMs);
+        console.log(`service: listening on *:${c.listenPort} (fd-handoff via ${sock}${why})`);
+        proxy.serveHandoffOnReactor(c.listenPort, sock, c.timeoutMs);
         return 0;
     }
 
@@ -78,9 +87,17 @@ fn main(): int {
     }
     let _ = addDiscovered(pool, c.discoveryFile, c.discoveryService);
 
+    // No backends to classically proxy -> handoff is the default (apps connect to the rendezvous), rather
+    // than refusing to start.
     if (pool.size() == 0) {
-        console.log("service: no live backends (static + discovery both empty); refusing to start");
-        return 1;
+        let sock = "/tmp/nova-service.sock";
+        if (config.hasFlag("--check")) {
+            console.log(`service: config OK (handoff default — no static backends, socket ${sock}, port ${c.listenPort})`);
+            return 0;
+        }
+        console.log(`service: listening on *:${c.listenPort} (fd-handoff via ${sock} — default: no static backends)`);
+        proxy.serveHandoffOnReactor(c.listenPort, sock, c.timeoutMs);
+        return 0;
     }
 
     if (config.hasFlag("--check")) {

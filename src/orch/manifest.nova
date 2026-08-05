@@ -86,8 +86,8 @@ struct Autoscale {
 @serializable
 struct Lb {
     pub strategy: string,        // roundrobin | weighted | leastconn | consistenthash
-    pub handoff: bool,
-    init() { self.strategy = "roundrobin"; self.handoff = false; }
+    pub handoff: bool,           // fd-passing data path — the DEFAULT (out-of-path); set false for classic L7
+    init() { self.strategy = "roundrobin"; self.handoff = true; }
 }
 
 @serializable

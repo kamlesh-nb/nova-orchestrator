@@ -80,7 +80,7 @@ fn test_manifest_defaults_fill_absent_fields(): void {
     assert.equalInt(m.replicas.max, 1);
     assert.isTrue(!m.autoscale.enabled);          // autoscaling off by default
     assert.equalStr(m.lb.strategy, "roundrobin"); // default strategy
-    assert.isTrue(!m.lb.handoff);
+    assert.isTrue(m.lb.handoff);                 // handoff is the default data path now
     assert.equalStr(m.health.path, "/healthz");   // default probe path
     assert.equalStr(m.network.expose, "gateway-only");
     assert.equalInt(m.routes.size(), 0);
