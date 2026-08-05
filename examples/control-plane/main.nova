@@ -10,6 +10,8 @@ import web.di;
 import web.routing;
 import web.response;
 import orch.controlplane;
+import datastar;
+import ds_sink;
 
 // A DI-registered singleton wrapping the app Registry (keeps orch.controlplane free of any web coupling).
 pub struct RegistryService impl Service {
@@ -48,11 +50,13 @@ pub struct AppsViewHandler impl RequestHandler<AppsView, Response> {
     rs: RegistryService,
     init(rs: RegistryService) { self.rs = rs; }
     async fn handle(self: AppsViewHandler, q: AppsView): Response {
-        // Emit a Datastar patch-elements SSE frame directly (the client, loaded from the CDN, applies
-        // it). The #apps fragment replaces the table in place. No long-lived stream: Datastar refetches
-        // on the interval declared in the shell.
-        let frame = "event: datastar-patch-elements\ndata: elements " + controlplane.appsFragment(self.rs.reg) + "\n\n";
-        return mediator.sse(frame);
+        // Build a Datastar patch-elements SSE frame via the nova-datastar package (imported cross-
+        // package). The #apps fragment replaces the table in place; the Datastar client (from the CDN)
+        // applies it. Datastar refetches on the interval declared in the shell (no long-lived stream).
+        let buf = ds_sink.BufferSink();
+        let gen = datastar.Sse.overBuffer(buf);
+        let _ = await gen.patchElementsSimple(controlplane.appsFragment(self.rs.reg));
+        return mediator.sse(buf.contents());
     }
 }
 
