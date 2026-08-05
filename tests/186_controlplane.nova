@@ -84,3 +84,14 @@ fn test_dashboard_html(): void {
     assert.isTrue(string.contains(h, "2-5"));                // replica band cell
     assert.isTrue(string.contains(h, "leastconn"));
 }
+
+@test
+fn test_apps_fragment_for_datastar(): void {
+    let r = controlplane.Registry();
+    let _ = r.deploy(appYaml("shop", 2, 5));
+    let f = controlplane.appsFragment(r);
+    assert.isTrue(string.startsWith(f, "<div id=\"apps\">"));   // patch target
+    assert.isTrue(string.contains(f, "shop"));
+    assert.isTrue(string.contains(f, "2-5"));
+    assert.isTrue(!string.contains(f, "\n"));                    // single line -> one SSE data line
+}
