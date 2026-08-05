@@ -10,6 +10,7 @@
 
 import orch.spec;
 import orch.supervisor;
+import orch.manifest;
 import io.dir;
 import io.file;
 import bytes;
@@ -23,7 +24,7 @@ const PROBE_FAIL_LIMIT = 3;
 
 // One scanned manifest file: its filename-stem key, the parsed spec, and whether the parse succeeded.
 // valid=false means the file exists but couldn't be read/parsed THIS tick (keep, don't delete).
-pub struct Manifest {
+pub struct ScanEntry {
     pub key: string,
     pub spec: spec.Spec,
     pub valid: bool,
@@ -130,13 +131,15 @@ pub struct Nativelet {
         return -1;
     }
 
-    // Scan the watch dir: one Manifest per `*.json` file, KEYED BY FILENAME STEM (`web.json` → `web`).
-    // Presence comes from the file existing, NOT from a successful parse — a transient unreadable or
-    // half-written file (e.g. a read interrupted by SIGCHLD when a child dies) yields a Manifest with
+    // Scan the watch dir: one ScanEntry per manifest file, KEYED BY FILENAME STEM (`web.yaml` → `web`).
+    // A `*.yaml`/`*.yml` file is the declarative Manifest schema (parsed via manifest.parseManifest,
+    // validated by validateManifest, lowered with toSpec); a `*.json` file is a legacy raw Spec (still
+    // supported). Presence comes from the file existing, NOT from a successful parse — a transient unreadable or
+    // half-written file (e.g. a read interrupted by SIGCHLD when a child dies) yields a ScanEntry with
     // valid=false, so reconcile KEEPS the running workload instead of tearing it down. Missing dir →
     // empty list (reconcile then stops everything — an explicit "no desired state").
-    pub fn scan(self: Nativelet): list.List<Manifest> {
-        let out = list.List<Manifest>();
+    pub fn scan(self: Nativelet): list.List<ScanEntry> {
+        let out = list.List<ScanEntry>();
         if (!dir.Dir.exists(self.manifestsDir)) { return out; }
         let d = dir.Dir.open(self.manifestsDir);
         let names = d.entries();
@@ -144,16 +147,29 @@ pub struct Nativelet {
         let i = 0;
         while (i < names.size()) {
             let nm = names.get(i) ?? "";
-            if (string.endsWith(nm, ".json")) {
+            // YAML manifest (the declarative schema): <name>.yaml / .yml -> ScanEntry -> Spec via toSpec.
+            let isYaml = string.endsWith(nm, ".yaml") || string.endsWith(nm, ".yml");
+            if (isYaml) {
+                let cut = if (string.endsWith(nm, ".yaml")) 5 else 4;
+                let key = string.slice(nm, 0, string.len(nm) - cut);
+                let text = file.File.readText(self.manifestsDir + "/" + nm);
+                if (string.eql(text, "")) {
+                    out.push(ScanEntry(key, spec.Spec("", ""), false)); // present but unreadable this tick
+                } else {
+                    let mani = manifest.parseManifest(text);
+                    // Parse-then-VALIDATE (P4 rollout safety): validate the manifest, then lower to a Spec.
+                    let ok = string.eql(manifest.validateManifest(mani), "");
+                    out.push(ScanEntry(key, manifest.toSpec(mani), ok));
+                }
+            } else if (string.endsWith(nm, ".json")) {
+                // Legacy JSON spec (still supported).
                 let key = string.slice(nm, 0, string.len(nm) - 5);   // strip ".json"
                 let text = file.File.readText(self.manifestsDir + "/" + nm);
                 if (string.eql(text, "")) {
-                    out.push(Manifest(key, spec.Spec("", ""), false)); // present but unreadable this tick
+                    out.push(ScanEntry(key, spec.Spec("", ""), false)); // present but unreadable this tick
                 } else {
                     let sp = spec.parseSpec(text);
-                    // Parse-then-VALIDATE (P4 rollout safety): a spec that parses but is semantically bad
-                    // is treated like an unreadable manifest -- keep the last-good workload, never apply it.
-                    out.push(Manifest(key, sp, string.eql(spec.validateSpec(sp), "")));
+                    out.push(ScanEntry(key, sp, string.eql(spec.validateSpec(sp), "")));
                 }
             }
             i = i + 1;
@@ -176,11 +192,11 @@ pub struct Nativelet {
 
     // Adapter kept for in-memory tests: treat each Spec as a valid manifest keyed by its own name.
     pub fn reconcileWith(self: Nativelet, desired: list.List<spec.Spec>): void {
-        let ms = list.List<Manifest>();
+        let ms = list.List<ScanEntry>();
         let i = 0;
         while (i < desired.size()) {
             let sp = desired.get(i) ?? spec.Spec("", "");
-            ms.push(Manifest(sp.name, sp, true));
+            ms.push(ScanEntry(sp.name, sp, true));
             i = i + 1;
         }
         self.reconcileScan(ms);
@@ -194,7 +210,7 @@ pub struct Nativelet {
     // manifest dir becomes an optional bootstrap importer (load files into the store once), no longer the
     // source of truth. An empty value is treated like an unreadable manifest: keep a running workload.
     pub fn reconcileFromEntries(self: Nativelet, entries: list.List<config.ConfigEntry>, prefix: string): void {
-        let ms = list.List<Manifest>();
+        let ms = list.List<ScanEntry>();
         let i = 0;
         while (i < entries.size()) {
             let e = entries.get(i) ?? config.ConfigEntry("", "", 0);
@@ -203,14 +219,14 @@ pub struct Nativelet {
             else
                 e.key;
             if (string.eql(e.value, "")) {
-                ms.push(Manifest(key, spec.Spec("", ""), false)); // present but empty → keep running
+                ms.push(ScanEntry(key, spec.Spec("", ""), false)); // present but empty → keep running
             } else {
                 let sp = spec.parseSpec(e.value);
                 // Parse-then-VALIDATE (P4 rollout safety): a spec that parses but is semantically bad (empty
                 // binaryPath, unknown restartPolicy, bad isolation level, ...) is treated like an unreadable
                 // manifest -- reconcileScan then keeps the last-good workload running instead of replacing a
                 // healthy one with a broken spec. A brand-new workload with a bad spec is simply not started.
-                ms.push(Manifest(key, sp, string.eql(spec.validateSpec(sp), "")));
+                ms.push(ScanEntry(key, sp, string.eql(spec.validateSpec(sp), "")));
             }
             i = i + 1;
         }
@@ -224,29 +240,29 @@ pub struct Nativelet {
     // is started, supervised, restarted, and torn down by the SAME reconcile machinery as the apps — no
     // special-case lifecycle. A no-op when servicePath is "" or the workload is not handoff, and never
     // expands an already-derived "-svc" entry (no recursion).
-    fn expandServices(self: Nativelet, manifests: list.List<Manifest>): list.List<Manifest> {
+    fn expandServices(self: Nativelet, manifests: list.List<ScanEntry>): list.List<ScanEntry> {
         if (string.eql(self.servicePath, "")) { return manifests; }
-        let out = list.List<Manifest>();
+        let out = list.List<ScanEntry>();
         let i = 0;
         while (i < manifests.size()) {
-            let m = manifests.get(i) ?? Manifest("", spec.Spec("", ""), false);
+            let m = manifests.get(i) ?? ScanEntry("", spec.Spec("", ""), false);
             out.push(m);
             if (m.valid && m.spec.handoff && !string.endsWith(m.key, "-svc")) {
                 let svc = spec.serviceSpecFrom(m.spec, self.servicePath);
-                out.push(Manifest(m.key + "-svc", svc, true));
+                out.push(ScanEntry(m.key + "-svc", svc, true));
             }
             i = i + 1;
         }
         return out;
     }
 
-    pub fn reconcileScan(self: Nativelet, manifestsIn: list.List<Manifest>): void {
+    pub fn reconcileScan(self: Nativelet, manifestsIn: list.List<ScanEntry>): void {
         let manifests = self.expandServices(manifestsIn);
         let presentKeys = list.List<string>();
 
         let i = 0;
         while (i < manifests.size()) {
-            let m = manifests.get(i) ?? Manifest("", spec.Spec("", ""), false);
+            let m = manifests.get(i) ?? ScanEntry("", spec.Spec("", ""), false);
             presentKeys.push(m.key);                 // file exists → workload is "present" regardless of parse
             let at = self.findJobIdx(m.key);
             if (!m.valid) {

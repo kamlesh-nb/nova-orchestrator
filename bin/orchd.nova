@@ -1,7 +1,8 @@
 // orchd -- the CONTROL-plane binary of the split orchestrator stack.
 //
-// The node agent (nativelet): it owns DESIRED STATE, not traffic. It watches a directory of JSON
-// workload manifests and reconciles desired vs actual -- spawning replicas, restarting on crash per
+// The node agent (nativelet): it owns DESIRED STATE, not traffic. It watches a directory of declarative
+// YAML workload manifests (legacy JSON specs still parse) and reconciles desired vs actual -- spawning
+// replicas, launching each handoff workload's gateway, restarting on crash per
 // policy, running health probes -- on a fixed loop. It has no listen port and forwards no requests; the
 // data plane (service) does that. The two coordinate ONLY through a service-discovery file.
 //
