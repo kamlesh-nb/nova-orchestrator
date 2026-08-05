@@ -40,6 +40,31 @@ pub fn decodeLease(s: string): LeaseState {
     return LeaseState(parts.at(0), string.parseI64(parts.at(1)), string.parseI64(parts.at(2)));
 }
 
+// Cluster-wide safety check: how many nodes are the VALID leader right now (the store shows them as holder,
+// at their epoch, unexpired). Under the CAS + fencing invariant this is ALWAYS 0 or 1; a value >= 2 is
+// split-brain and a hard bug. O2 asserts this stays <= 1 across partition/heal chaos; a live deployment can
+// scrape it as the split-brain gauge. `defaultNode` is a throwaway used only for the optional unwrap.
+pub fn validLeaderCount(nodes: list.List<LeaderLease>, defaultNode: LeaderLease, nowMs: long): int {
+    let n = 0;
+    let i = 0;
+    while (i < nodes.size()) {
+        if ((nodes.get(i) ?? defaultNode).stillLeader(nowMs)) { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+// The nodeId of the current valid leader (first one found), or "" if the cluster has no leader right now.
+pub fn electedLeaderId(nodes: list.List<LeaderLease>, defaultNode: LeaderLease, nowMs: long): string {
+    let i = 0;
+    while (i < nodes.size()) {
+        let nd = nodes.get(i) ?? defaultNode;
+        if (nd.stillLeader(nowMs)) { return nd.nodeId; }
+        i = i + 1;
+    }
+    return "";
+}
+
 pub struct LeaderLease {
     pub store: config.ConfigStore,
     pub nodeId: string,
