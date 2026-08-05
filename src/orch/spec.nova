@@ -48,6 +48,9 @@ pub struct Spec {
     // listening socket). The service for this workload binds the SAME rendezvous path.
     pub handoff: bool,
     pub handoffSock: string,
+    // The front port the workload's SERVICE (gateway) listens on (carried on the app Spec so orchd can
+    // derive the service Spec from it via serviceSpecFrom). 0 = default 8080.
+    pub servicePort: int,
     init(name: string, binaryPath: string) {
         self.name = name;
         self.binaryPath = binaryPath;
@@ -68,6 +71,7 @@ pub struct Spec {
         self.netnsBase = 0;
         self.handoff = false;
         self.handoffSock = "";
+        self.servicePort = 0;
     }
 }
 
@@ -116,6 +120,27 @@ pub fn parseSpec(text: string): Spec {
         s.basePort = (json.asNumber(json.get(sv, "basePort")) ?? 0) as int;
         s.portFlag = json.asString(json.get(sv, "portFlag")) ?? "";
     }
+    // fd-handoff: { "handoff": { "sock": "/tmp/nova-web.sock", "servicePort": 8080 } }. When present the
+    // workload's apps run in handoff mode (NOVA_HANDOFF_SOCK) and orchd launches its service on servicePort.
+    if (json.has(root, "handoff")) {
+        let hf = json.get(root, "handoff");
+        s.handoff = true;
+        s.handoffSock = json.asString(json.get(hf, "sock")) ?? ("/tmp/nova-" + s.name + ".sock");
+        s.servicePort = (json.asNumber(json.get(hf, "servicePort")) ?? 8080) as int;
+    }
+    return s;
+}
+
+// Derive the SERVICE (gateway) Spec for a handoff workload `app` — what orchd runs alongside the app
+// replicas. Same rendezvous the apps use (app.handoffSock), the service binary, one replica, listening on
+// app.servicePort (the supervisor's handoff spawn turns basePort into NOVA_PORT). Name suffixed "-svc".
+pub fn serviceSpecFrom(app: Spec, servicePath: string): Spec {
+    let s = Spec(app.name + "-svc", servicePath);
+    s.replicas = 1;
+    s.restartPolicy = "always";
+    s.handoff = true;
+    s.handoffSock = app.handoffSock;
+    s.basePort = if (app.servicePort > 0) app.servicePort else 8080;
     return s;
 }
 

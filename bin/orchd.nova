@@ -72,6 +72,7 @@ fn main(): int {
     // Publish live service endpoints for service to load-balance across (no-op unless discoveryFile is set).
     n.discoveryFile = c.discoveryFile;
     n.advertiseHost = c.advertiseHost;
+    n.servicePath = c.servicePath;   // when set, orchd launches each handoff workload's service too
     // Block-drive the async composition root (reconcile loop + optional metrics publisher).
     let _ = runAll(n, c);
     return 0;

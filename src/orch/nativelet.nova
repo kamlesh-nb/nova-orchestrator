@@ -79,6 +79,10 @@ pub struct Nativelet {
     // O6: propagated to every Supervisor -- true = deterministic VIRTUAL replicas (crash-loop / rescale
     // lifecycle testable in-process without spawning binaries). Independent of manageProcesses.
     pub simulated: bool,
+    // Path to the `service` (gateway) binary. When set, each handoff workload gets a companion service
+    // process launched + supervised alongside its app replicas (see expandServices). "" disables it (the
+    // service is then deployed out-of-band).
+    pub servicePath: string,
     init(manifestsDir: string) {
         self.manifestsDir = manifestsDir;
         self.jobs = list.List<Job>();
@@ -86,6 +90,7 @@ pub struct Nativelet {
         self.discoveryFile = "";
         self.advertiseHost = "127.0.0.1";
         self.simulated = false;
+        self.servicePath = "";
     }
 
     // Render the service-discovery file contents from the current jobs: one `name=host:port` line per
@@ -214,7 +219,29 @@ pub struct Nativelet {
 
     // The reconcile DIFF over scanned manifests: start new, replace changed, poll unchanged, keep the
     // ones that failed to read this tick, and stop only workloads whose FILE is genuinely gone.
-    pub fn reconcileScan(self: Nativelet, manifests: list.List<Manifest>): void {
+    // Expand the desired set with a companion SERVICE (gateway) workload for every handoff app: `web`
+    // (handoff) also yields `web-svc` running the service binary on the same rendezvous. So the service
+    // is started, supervised, restarted, and torn down by the SAME reconcile machinery as the apps — no
+    // special-case lifecycle. A no-op when servicePath is "" or the workload is not handoff, and never
+    // expands an already-derived "-svc" entry (no recursion).
+    fn expandServices(self: Nativelet, manifests: list.List<Manifest>): list.List<Manifest> {
+        if (string.eql(self.servicePath, "")) { return manifests; }
+        let out = list.List<Manifest>();
+        let i = 0;
+        while (i < manifests.size()) {
+            let m = manifests.get(i) ?? Manifest("", spec.Spec("", ""), false);
+            out.push(m);
+            if (m.valid && m.spec.handoff && !string.endsWith(m.key, "-svc")) {
+                let svc = spec.serviceSpecFrom(m.spec, self.servicePath);
+                out.push(Manifest(m.key + "-svc", svc, true));
+            }
+            i = i + 1;
+        }
+        return out;
+    }
+
+    pub fn reconcileScan(self: Nativelet, manifestsIn: list.List<Manifest>): void {
+        let manifests = self.expandServices(manifestsIn);
         let presentKeys = list.List<string>();
 
         let i = 0;

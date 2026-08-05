@@ -229,6 +229,7 @@ pub fn toSpec(m: Manifest): spec.Spec {
     if (m.lb.handoff) {
         s.handoff = true;
         s.handoffSock = `/tmp/nova-${m.metadata.name}.sock`;
+        s.servicePort = if (m.network.servicePort > 0) m.network.servicePort else 8080;
         return s;
     }
     let mode = isolationMode(m);

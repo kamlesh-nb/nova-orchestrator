@@ -228,6 +228,9 @@ pub struct OrchConfig {
     // is the per-workload restart count at/above which a crash-loop alert fires.
     pub metricsFile: string,
     pub crashLoopRestarts: int,
+    // Path to the `service` (gateway) binary. When set, orchd launches + supervises a service process for
+    // each handoff workload (on its rendezvous). "" = do not manage the service (deploy it out-of-band).
+    pub servicePath: string,
     init() {
         self.manifestsDir = "manifests";
         self.reconcileMs = 2000;
@@ -237,6 +240,7 @@ pub struct OrchConfig {
         self.store = StoreConfig();
         self.metricsFile = "";
         self.crashLoopRestarts = 5;
+        self.servicePath = "";
     }
 }
 
@@ -251,6 +255,7 @@ pub fn loadOrchConfig(path: string): OrchConfig {
     c.advertiseHost = json.asString(json.get(root, "advertiseHost")) ?? c.advertiseHost;
     c.metricsFile = json.asString(json.get(root, "metricsFile")) ?? c.metricsFile;
     c.crashLoopRestarts = (json.asNumber(json.get(root, "crashLoopRestarts")) ?? (c.crashLoopRestarts as long)) as int;
+    c.servicePath = json.asString(json.get(root, "servicePath")) ?? c.servicePath;
 
     if (json.has(root, "store")) {
         let st = json.get(root, "store");
