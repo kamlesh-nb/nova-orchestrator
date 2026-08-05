@@ -8,6 +8,10 @@
 // This is the SPINE the rest of I1 hangs off: health checks, least-conn/weighted LB, and the PID
 // autoscaler (which spawns/kills backends via R1) layer on top of the same Pool + handler.
 import net.aio;
+import net.eventedio;
+import net.poller;
+import os.sys;
+import os.socket;
 import string;
 import list;
 import bytes;
@@ -411,15 +415,16 @@ fn chunkedEnd(buf: long, start: int, len: int): int {
 // ("" on error / EOF before the headers complete). `isResponse` picks the no-length fallback: a
 // response with neither Content-Length nor chunked framing ends at connection close (read to EOF);
 // a request without a body ends at the header block.
-async fn readMessage(sock: long, isResponse: bool, tmo: int): HttpMsg {
+async fn readMessage(s: aio.AsyncStream, isResponse: bool, tmo: int): HttpMsg {
     let cap = 65536;
     let buf: long = bytes.alloc(cap);
     let len = 0;
+    let _ = s.setTimeout(tmo);   // per-recv deadline on the reactor-native stream
 
     let hdrEnd = findHeaderEnd(buf, len);
     while (hdrEnd == -1) {
         if (len >= cap) { bytes.free(buf); return HttpMsg("", false, true); }
-        let n = await aio.async_read_deadline(sock, buf + len, cap - len, tmo);
+        let n = await s.recvInto(buf + len, cap - len);
         if (n <= 0) { bytes.free(buf); return HttpMsg("", false, true); }
         len = len + n;
         hdrEnd = findHeaderEnd(buf, len);
@@ -434,7 +439,7 @@ async fn readMessage(sock: long, isResponse: bool, tmo: int): HttpMsg {
         let cend = chunkedEnd(buf, bodyStart, len);
         while (cend == -1) {
             if (len >= cap) { framed = false; break; }
-            let n = await aio.async_read_deadline(sock, buf + len, cap - len, tmo);
+            let n = await s.recvInto(buf + len, cap - len);
             if (n <= 0) { framed = false; break; }
             len = len + n;
             cend = chunkedEnd(buf, bodyStart, len);
@@ -445,7 +450,7 @@ async fn readMessage(sock: long, isResponse: bool, tmo: int): HttpMsg {
         if (need >= 0) {
             while (len - bodyStart < need) {
                 if (len >= cap) { framed = false; break; }
-                let n = await aio.async_read_deadline(sock, buf + len, cap - len, tmo);
+                let n = await s.recvInto(buf + len, cap - len);
                 if (n <= 0) { framed = false; break; }
                 len = len + n;
             }
@@ -456,7 +461,7 @@ async fn readMessage(sock: long, isResponse: bool, tmo: int): HttpMsg {
             // connection. Read to EOF; the connection is consumed, so it is NOT reusable.
             framed = false;
             while (len < cap) {
-                let n = await aio.async_read_deadline(sock, buf + len, cap - len, tmo);
+                let n = await s.recvInto(buf + len, cap - len);
                 if (n <= 0) { break; }
                 len = len + n;
             }
@@ -472,47 +477,6 @@ async fn readMessage(sock: long, isResponse: bool, tmo: int): HttpMsg {
 }
 
 // ---------------------------------------------------------------------------
-// Backend connection pool — acquire (reuse-or-dial) / release (keep-or-close)
-// ---------------------------------------------------------------------------
-
-// Take a connection to `b`: reuse a warm idle one if available, else dial fresh. The dial happens
-// OUTSIDE the lock (asyncConnect parks the coroutine). Returns a socket handle, or 0 on connect failure.
-async fn acquire(b: Backend): (long, bool) {
-    // Pop from THIS worker's idle list only (no lock — see Backend.idle). The pop completes before any
-    // await, so the coroutine can't migrate mid-critical-section.
-    let t = nova_thread_id() as int;
-    let lst = b.idle.get(t) ?? List<long>();
-    let sock: long = 0;
-    let n = lst.size();
-    if (n > 0) {
-        sock = lst.get(n - 1) ?? 0;
-        lst.remove(n - 1);
-    }
-    if (sock != 0) { return (sock, true); }   // warm reuse — no handshake, no resolve
-    let s = await aio.asyncConnect(b.host, b.port);
-    return (s.sock, false);                    // 0 on failure
-}
-
-// Return a connection to the CURRENT worker's idle list when the exchange left it at a clean message
-// boundary (reusable), else close it. Bounded per worker so a burst can't grow a list without limit.
-// Lock-free: sync (no await), so it runs entirely on one worker touching only that worker's list.
-//
-// REUSE IS GATED TO A SINGLE WORKER (nova_worker_count() == 1). This runtime binds each socket's async
-// I/O to a PER-COROUTINE strand (CoroState.strand), so a pooled socket moving between coroutines/threads
-// races under multi-threading (measured: reuse at NOVA_THREADS=8 corrupts; at =1 it is clean). So with
-// >1 worker we fall back to connect-per-request (correct); pooling engages single-threaded, where there
-// is no strand concurrency. Scale a pooled proxy as N single-threaded workers behind SO_REUSEPORT (the
-// nginx model) — or lift this once the runtime can detach/reattach a socket from its coroutine.
-fn release(b: Backend, sock: long, reusable: bool): void {
-    if (sock == 0) { return; }
-    if (!reusable || !b.reuse) { aio.aclose(sock); return; }
-    let t = nova_thread_id() as int;
-    let lst = b.idle.get(t) ?? List<long>();
-    if (lst.size() < 256) { lst.push(sock); }
-    else { aio.aclose(sock); }
-}
-
-// ---------------------------------------------------------------------------
 // Proxy
 // ---------------------------------------------------------------------------
 
@@ -520,33 +484,85 @@ fn errorResponse(code: int, reason: string, body: string): string {
     return `HTTP/1.1 ${code} ${reason}\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`;
 }
 
-// Forward ONE request to backend `b` over a pooled connection, returning the response. Reuses a warm
-// idle connection when possible; if a reused connection turns out dead (the backend closed it while
-// idle → empty read on first use), retries ONCE on a fresh dial (HAProxy "safe" reuse). Returns "" if
-// the backend is unreachable / gives nothing even fresh.
-async fn forward(b: Backend, reqBytes: string, reqWantClose: bool, tmo: int): string {
-    let (bsock, reused) = await acquire(b);
-    if (bsock == 0) { return ""; }
+// ---------------------------------------------------------------------------
+// Keep-alive backend connection pool (HAProxy-style). Reusing a warm connection skips the TCP
+// handshake + DNS resolve + ephemeral-port churn on every request, which is the dominant cost of a
+// proxy hop, so it is the biggest single lever on throughput.
+//
+// The pool stores raw fds (a `long` per idle connection), NOT stream objects: a socket's async I/O is
+// bound to the coroutine that drives it, so each use rebuilds a fresh `AsyncStream(fd)` on the CURRENT
+// coroutine's frame (the same discipline the accept loop uses). The idle lists are PER-REACTOR
+// (indexed by reactor id) and popped/pushed with no `await` in between, so under share-nothing (one
+// single-threaded reactor per process) they need no lock: a pooled fd is created, used, returned, and
+// reused entirely on one reactor thread and never migrates.
+// ---------------------------------------------------------------------------
 
-    let _ = await aio.async_write(bsock, reqBytes);
-    let resp = await readMessage(bsock, true, tmo);
+// Take a connection to `b`: a warm idle fd if one is available, else a fresh dial. Returns (fd, reused);
+// fd is 0 on connect failure. reused=true means the caller must retry once on a fresh dial if the first
+// exchange comes back empty (a pooled connection the backend closed while it was idle).
+async fn acquireBackend(b: Backend): (long, bool) {
+    let t = nova_thread_id() as int;
+    let lst = b.idle.get(t) ?? List<long>();
+    let n = lst.size();
+    if (n > 0) {
+        let fd = lst.get(n - 1) ?? 0;
+        lst.remove(n - 1);                 // pop completes before any await; no migration mid-section
+        if (fd != 0) { return (fd, true); }
+    }
+    let s = await aio.asyncConnect(b.host, b.port);
+    return (s.sock, false);
+}
+
+// Return `fd` to THIS reactor's idle list when the exchange left it at a clean message boundary
+// (reusable), else close it. Bounded per reactor so a burst cannot grow a list without limit.
+fn releaseBackend(b: Backend, fd: long, reusable: bool, kq: int): void {
+    if (fd == 0) { return; }
+    if (!reusable || !b.reuse) {
+        let s = aio.AsyncStream(fd); s.kq = kq; s.close();
+        return;
+    }
+    let t = nova_thread_id() as int;
+    let lst = b.idle.get(t) ?? List<long>();
+    if (lst.size() < 256) { lst.push(fd); }
+    else { let s = aio.AsyncStream(fd); s.kq = kq; s.close(); }
+}
+
+// One request/response exchange with backend `b` over `fd`, rebuilding the stream on this coroutine.
+async fn exchange(fd: long, kq: int, reqBytes: string, tmo: int): HttpMsg {
+    let s = aio.AsyncStream(fd);
+    s.kq = kq;
+    let _ = s.setTimeout(tmo);
+    let _ = await s.sendStr(reqBytes);
+    return await readMessage(s, true, tmo);
+}
+
+// Forward ONE request to backend `b`, returning the response bytes ("" on failure). Reuses a warm
+// pooled connection when possible; if a reused connection turns out dead (empty read on first use),
+// retries ONCE on a fresh dial (HAProxy "safe reuse"). A connection is returned to the pool only when
+// both sides stayed keep-alive AND the reply was cleanly framed (Content-Length / chunked), so we know
+// it sits at a message boundary; otherwise it is closed.
+async fn forward(b: Backend, reqBytes: string, reqWantClose: bool, tmo: int): string {
+    let kq = poller.currentKq();
+    let (fd, reused) = await acquireBackend(b);
+    if (fd == 0) { return ""; }
+
+    let resp = await exchange(fd, kq, reqBytes, tmo);
 
     if (string.eql(resp.bytes, "") && reused) {
-        aio.aclose(bsock);
+        // The pooled connection was stale (backend closed it while idle). Dial fresh and retry once.
+        let s = aio.AsyncStream(fd); s.kq = kq; s.close();
         let fresh = await aio.asyncConnect(b.host, b.port);
-        bsock = fresh.sock;
-        if (bsock == 0) { return ""; }
-        let _ = await aio.async_write(bsock, reqBytes);
-        resp = await readMessage(bsock, true, tmo);
+        if (fresh.sock == 0) { return ""; }
+        let resp2 = await exchange(fresh.sock, kq, reqBytes, tmo);
+        if (string.eql(resp2.bytes, "")) { releaseBackend(b, fresh.sock, false, kq); return ""; }
+        let reusable2 = resp2.framed && !resp2.wantClose && !reqWantClose;
+        releaseBackend(b, fresh.sock, reusable2, kq);
+        return resp2.bytes;
     }
 
-    if (string.eql(resp.bytes, "")) {
-        release(b, bsock, false);
-        return "";
-    }
-    // Reusable only when BOTH sides stayed keep-alive AND the reply was cleanly framed (at a boundary).
+    if (string.eql(resp.bytes, "")) { releaseBackend(b, fd, false, kq); return ""; }
     let reusable = resp.framed && !resp.wantClose && !reqWantClose;
-    release(b, bsock, reusable);
+    releaseBackend(b, fd, reusable, kq);
     return resp.bytes;
 }
 
@@ -554,15 +570,20 @@ async fn forward(b: Backend, reqBytes: string, reqWantClose: bool, tmo: int): st
 // `Connection: close`. Each request is load-balanced independently (round-robin) and forwarded over a
 // pooled backend connection. Runs as its own coroutine (spawned), so a slow exchange never stalls the
 // accept loop or the other clients.
-async fn handleClient(pool: Pool, clientSock: long, tmo: int): int {
+async fn handleClient(pool: Pool, fd: int, kq: int, tmo: int): int {
+    // Rebuild the client stream from primitives INSIDE this coroutine (see the accept loop) so the
+    // object lives on this coroutine's frame and survives every await (including the backend detour).
+    let client = aio.AsyncStream(fd as long);
+    client.kq = kq;
+    let _ = client.setTimeout(tmo);
     let alive = true;
     while (alive) {
-        let req = await readMessage(clientSock, false, tmo);
+        let req = await readMessage(client, false, tmo);
         if (string.eql(req.bytes, "")) { alive = false; break; }  // client closed / error
 
         let b = pool.select(reqKey(req.bytes));   // key used only by ConsistentHash; others ignore it
         if (b.port == 0) {
-            let _ = await aio.async_write(clientSock, errorResponse(502, "Bad Gateway", "no backends"));
+            let _ = await client.sendStr(errorResponse(502, "Bad Gateway", "no backends"));
             alive = false;
             break;
         }
@@ -571,14 +592,14 @@ async fn handleClient(pool: Pool, clientSock: long, tmo: int): int {
         let resp = await forward(b, req.bytes, req.wantClose, tmo);
         b.releaseConn();
         if (string.eql(resp, "")) {
-            let _ = await aio.async_write(clientSock, errorResponse(502, "Bad Gateway", "upstream error"));
+            let _ = await client.sendStr(errorResponse(502, "Bad Gateway", "upstream error"));
             alive = false;
             break;
         }
-        let _ = await aio.async_write(clientSock, resp);
+        let _ = await client.sendStr(resp);
         if (req.wantClose) { alive = false; }
     }
-    aio.aclose(clientSock);
+    client.close();
     return 0;
 }
 
@@ -602,18 +623,32 @@ fn healthyStatus(raw: string): bool {
 // GET of `path` whose 2xx/3xx status proves the app is serving. Fully non-blocking (parks the checker
 // coroutine, never a thread). Returns whether the probe succeeded.
 async fn probeBackend(b: Backend, timeoutMs: int, path: string): bool {
-    let s = await aio.asyncConnect(b.host, b.port);
-    if (s.sock == 0) { return false; }
+    let kq = poller.currentKq();
+    // Probe through the SAME keep-alive pool as request traffic, so the health checker does not open
+    // its own connections concurrently with the request path (concurrent fresh reactor connects on one
+    // reactor can collide). After warmup this reuses a warm connection and opens nothing.
+    let (fd, reused) = await acquireBackend(b);
+    if (fd == 0) { return false; }
     if (string.len(path) == 0) {
-        aio.aclose(s.sock);
-        return true;                           // TCP connect succeeded
+        releaseBackend(b, fd, true, kq);       // a successful connect/reuse proves the port is live
+        return true;
     }
-    let req = `GET ${path} HTTP/1.1\r\nHost: ${b.host}\r\nConnection: close\r\n\r\n`;
-    let _ = await aio.async_write(s.sock, req);
-    let resp = await readMessage(s.sock, true, timeoutMs);
-    aio.aclose(s.sock);
-    if (string.eql(resp.bytes, "")) { return false; }
-    return healthyStatus(resp.bytes);
+    // Keep-alive so the connection stays poolable after the probe.
+    let req = `GET ${path} HTTP/1.1\r\nHost: ${b.host}\r\nConnection: keep-alive\r\n\r\n`;
+    let resp = await exchange(fd, kq, req, timeoutMs);
+    if (string.eql(resp.bytes, "") && reused) {
+        // Stale pooled connection: retry once on a fresh dial (HAProxy safe reuse).
+        let st = aio.AsyncStream(fd); st.kq = kq; st.close();
+        let fr = await aio.asyncConnect(b.host, b.port);
+        if (fr.sock == 0) { return false; }
+        let resp2 = await exchange(fr.sock, kq, req, timeoutMs);
+        let ok2 = !string.eql(resp2.bytes, "") && healthyStatus(resp2.bytes);
+        releaseBackend(b, fr.sock, resp2.framed && !resp2.wantClose, kq);
+        return ok2;
+    }
+    let ok = !string.eql(resp.bytes, "") && healthyStatus(resp.bytes);
+    releaseBackend(b, fd, resp.framed && !resp.wantClose, kq);
+    return ok;
 }
 
 // The health-check sweep: probe every backend in turn, fold each result into its rise/fall hysteresis,
@@ -639,15 +674,37 @@ async fn healthCheckLoop(pool: Pool): int {
 // spawn a handler per client. Handlers stay on the accepting reactor, so their backend connections are
 // acquired/pooled/reused on the same reactor's per-reactor idle list (safe, lock-free).
 async fn proxyAcceptLoop(pool: Pool, host: string, port: int, tmo: int): int {
-    // Empty host ⇒ INADDR_ANY (ordinary proxy); a non-empty host binds a specific Service VIP (I3).
-    let srv = if (string.eql(host, "")) aio.serverListen(port) else aio.serverListenAddr(host, port);
-    if (srv == 0) {
+    // Reactor-native front-port listener, mirroring web/app.nova's reactorWorkerBody: a SO_REUSEPORT
+    // socket bound on THIS reactor, accepted via eventedio on the current kq. This replaces the retired
+    // Asio serverListen/aaccept path (those runtime hooks are now stubs). Binds INADDR_ANY; a specific
+    // Service VIP host is a follow-up (needs host->addr resolution on the reactor bind path).
+    let lfd = sys.socket(sys.AF_INET, sys.SOCK_STREAM, 0);
+    let one = bytes.alloc(4);
+    bytes.write_i32(one, 0, 1);
+    sys.setsockopt(lfd, sys.SOL_SOCKET(), 4, one, 4);   // SO_REUSEADDR
+    sys.setReusePort(lfd);
+    bytes.free(one);
+    let sa = sys.makeSockaddrIn(port, 0);
+    if (sys.bind(lfd, sa, 16) != 0) {
+        bytes.free(sa);
         console.log("proxy: failed to bind front port (in use?)");
         return -1;
     }
+    bytes.free(sa);
+    sys.listen(lfd, 512);
+    sys.setNonBlocking(lfd);
+
+    let kq = poller.currentKq();
     while (true) {
-        let client = await aio.aaccept(srv);
-        spawn handleClient(pool, client, tmo);
+        let rs = await eventedio.reactorAccept(lfd, kq);
+        if (rs.isOpen()) {
+            sys.setNonBlocking(rs.fdOf());          // reactor I/O needs a non-blocking accepted fd
+            // Pass the fd + kq as INTS, not the AsyncStream object: a struct handed across coroStart is
+            // not retained by the new coroutine, so it would be reclaimed during the backend await and the
+            // client fd would go garbage on the response write. handleClient rebuilds the stream locally
+            // (exactly how web/app.nova's serveReactorConn does it).
+            coroStart(handleClient(pool, rs.fdOf(), kq, tmo));
+        }
     }
     return 0;
 }
@@ -669,6 +726,137 @@ async fn runProxy(pool: Pool, host: string, port: int, tmo: int): int {
     }
     console.log("Nova reverse proxy listening (share-nothing)");
     return await proxyAcceptLoop(pool, host, port, tmo);
+}
+
+// Single-reactor serve on THIS thread. Mirrors web/app.nova's reactorWorkerBody: create a reactor, make
+// it current, start the health-check + accept coroutines on it, then drive the poll loop forever. This
+// is the reactor-native replacement for the retired Asio pump (holdReactors + Asio io_context). Blocks.
+// Share-nothing per PROCESS: scale as N proxyd instances behind SO_REUSEPORT, orchestrator-managed.
+pub fn serveOnReactor(pool: Pool, port: int, tmo: int): void {
+    let r = poller.Reactor(1024, 16384, 1024);
+    poller.setCurrent(r.kq);
+    if (pool.hcEnabled) { coroStart(healthCheckLoop(pool)); }
+    coroStart(proxyAcceptLoop(pool, "", port, tmo));
+    console.log("Nova reverse proxy listening (single reactor)");
+    while (true) {
+        let n = r.pollComplete(-1);
+        poller.batchBegin();
+        let i = 0;
+        while (i < n) {
+            nova_reactor_resume(r.completedToken(i));
+            i = i + 1;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// fd-passing handoff mode (L4-style, out-of-path). Instead of reading the request, dialling a backend,
+// and shuttling bytes both ways, proxyd PASSES the client socket to a backend app over an AF_UNIX
+// control channel (SCM_RIGHTS); the app replies to the client directly and proxyd is out of the data
+// path. proxyd does not parse HTTP here, so selection is per-CONNECTION round-robin (no path affinity,
+// no response buffering, no keep-alive backend pool -- none of those apply once the app owns the socket).
+// Same-host only: fd-passing cannot cross a kernel, which fits the orchd co-resident node topology.
+// ---------------------------------------------------------------------------
+
+// Live backend app control channels, plus the round-robin cursor. Mutated by two coroutines on ONE
+// reactor (the ctrl-accept loop pushes; the client loop reads + round-robins + removes dead ones); safe
+// without a lock because a single-threaded reactor runs one coroutine at a time and neither critical
+// section awaits between touching the list and finishing with it (the same discipline as the idle pool).
+struct Handoff {
+    pub ctrls: List<int>,
+    pub cursor: int,
+    init() { self.ctrls = List<int>(); self.cursor = 0; }
+}
+
+// Accept backend app connections on the AF_UNIX rendezvous and register each control channel. Apps
+// connect here at startup (NOVA_HANDOFF_SOCK); a disconnect is noticed lazily when a handoff send fails.
+async fn handoffCtrlAcceptLoop(h: Handoff, ulfd: int, kq: int): int {
+    while (true) {
+        let rs = await eventedio.reactorAccept(ulfd, kq);
+        if (rs.isOpen()) {
+            h.ctrls.push(rs.fdOf());
+            console.log(`proxy: backend app connected (${h.ctrls.size()} live)`);
+        }
+    }
+    return 0;
+}
+
+// Accept TCP clients on the front port and hand each one to a backend app round-robin. proxyd never
+// reads the client socket: it passes the fd straight over the control channel and closes its own copy.
+async fn handoffClientAcceptLoop(h: Handoff, port: int, kq: int): int {
+    let lfd = sys.socket(sys.AF_INET, sys.SOCK_STREAM, 0);
+    let one = bytes.alloc(4);
+    bytes.write_i32(one, 0, 1);
+    sys.setsockopt(lfd, sys.SOL_SOCKET(), 4, one, 4);   // SO_REUSEADDR
+    sys.setReusePort(lfd);
+    bytes.free(one);
+    let sa = sys.makeSockaddrIn(port, 0);
+    if (sys.bind(lfd, sa, 16) != 0) {
+        bytes.free(sa);
+        console.log("proxy: failed to bind front port (in use?)");
+        return -1;
+    }
+    bytes.free(sa);
+    sys.listen(lfd, 512);
+    sys.setNonBlocking(lfd);
+
+    while (true) {
+        let rs = await eventedio.reactorAccept(lfd, kq);
+        if (rs.isOpen()) {
+            let cfd = rs.fdOf();
+            let n = h.ctrls.size();
+            if (n == 0) {
+                socket.close(cfd);                      // no backends yet; drop the client
+            } else {
+                let idx = h.cursor % n;
+                h.cursor = h.cursor + 1;
+                let ctrl = h.ctrls.get(idx) ?? -1;
+                let sent = socket.sendFd(ctrl, cfd, "");
+                socket.close(cfd);                      // hand-off done: proxyd drops out of the data path
+                if (sent < 0) {                         // the backend app died: drop its control channel
+                    socket.close(ctrl);
+                    h.ctrls.remove(idx);
+                    console.log(`proxy: backend app gone (${h.ctrls.size()} live)`);
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// Single-reactor fd-handoff serve. Binds the AF_UNIX rendezvous + the TCP front port, then drives the
+// reactor forever: apps connect on the rendezvous, clients are passed to them round-robin. Blocks.
+pub fn serveHandoffOnReactor(port: int, ctrlPath: string, tmo: int): void {
+    let r = poller.Reactor(1024, 16384, 1024);
+    poller.setCurrent(r.kq);
+    let h = Handoff();
+
+    let cp = sys.cstr(ctrlPath);
+    sys.unlink(cp);
+    bytes.free(cp);
+    let u = socket.newUnix();
+    let ua = socket.makeSockaddrUn(ctrlPath);
+    if (socket.bindSock(u, ua, socket.sockaddrUnLen()) != 0) {
+        bytes.free(ua);
+        console.log("proxy: handoff AF_UNIX bind failed " + ctrlPath);
+        return;
+    }
+    bytes.free(ua);
+    socket.listenSock(u, 128);
+    socket.setNonBlock(u);
+
+    coroStart(handoffCtrlAcceptLoop(h, u, r.kq));
+    coroStart(handoffClientAcceptLoop(h, port, r.kq));
+    console.log("Nova reverse proxy listening (fd-handoff, single reactor) on " + ctrlPath);
+    while (true) {
+        let n = r.pollComplete(-1);
+        poller.batchBegin();
+        let i = 0;
+        while (i < n) {
+            nova_reactor_resume(r.completedToken(i));
+            i = i + 1;
+        }
+    }
 }
 
 // Public entry to the share-nothing accept fan-out (the body of Proxy.run, minus holdReactors). Lets

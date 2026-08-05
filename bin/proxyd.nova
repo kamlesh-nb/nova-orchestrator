@@ -49,6 +49,21 @@ fn main(): int {
     let pe = env.get("NOVA_PORT");
     if (!string.eql(pe, "")) { c.listenPort = string.parseI64(pe) as int; }
 
+    // fd-passing handoff mode (out-of-path, L4-style): when NOVA_HANDOFF_SOCK is set, proxyd binds that
+    // AF_UNIX rendezvous and hands accepted client sockets to backend apps that connect to it, instead of
+    // forwarding bytes to a static/discovered backend Pool. No backends config is needed (apps register
+    // themselves), so this bypasses pool building and the empty-pool guard. Same-host only.
+    let handoff = env.get("NOVA_HANDOFF_SOCK");
+    if (!string.eql(handoff, "")) {
+        if (config.hasFlag("--check")) {
+            console.log(`proxyd: config OK (handoff mode, socket ${handoff}, port ${c.listenPort})`);
+            return 0;
+        }
+        console.log(`proxyd: listening on *:${c.listenPort} (fd-handoff via ${handoff})`);
+        proxy.serveHandoffOnReactor(c.listenPort, handoff, c.timeoutMs);
+        return 0;
+    }
+
     let err = config.validateProxy(c);
     if (!string.eql(err, "")) {
         console.log(`proxyd: invalid config (${path}): ${err}`);
@@ -81,9 +96,9 @@ fn main(): int {
 
     let bindHost = if (string.eql(c.listenHost, "")) "*" else c.listenHost;
     console.log(`proxyd: listening on ${bindHost}:${c.listenPort}, ${pool.size()} backend(s), strategy=${c.strategy}, health=${c.healthChecks}`);
-    // holdReactors keeps every reactor alive BEFORE the block-drive so the per-reactor accept fan-out
-    // lands on live reactors (share-nothing). serveAddr blocks forever, driving the reactor.
-    aio.holdReactors();
-    let _ = proxy.serveAddr(pool, c.listenHost, c.listenPort, c.timeoutMs);
+    // Single reactor on this thread (share-nothing per process). serveOnReactor creates + drives the
+    // reactor and blocks forever. To use more cores, run more proxyd instances behind SO_REUSEPORT and
+    // let the orchestrator manage them (the horizontal-scaling model; see the deployment guide).
+    proxy.serveOnReactor(pool, c.listenPort, c.timeoutMs);
     return 0;
 }
