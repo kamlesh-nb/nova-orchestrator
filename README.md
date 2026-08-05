@@ -27,7 +27,8 @@ half of the package through the import graph, so dead-code elimination keeps the
 | Binary | Plane | Owns | Modules |
 |--------|-------|------|---------|
 | **`proxyd`** | data | traffic: L7 reverse proxy, load balancing, health-checked membership, service VIPs | `net.proxy`, `net.service`, `net.autoscale` |
-| **`orchd`**  | control | desired state: manifest reconcile, replica supervision, restart policy, isolation, leader lease, config store | `orch.*`, `store.*`, `os.sandbox` |
+| **`orchd`**  | control | desired state: manifest reconcile, replica supervision, restart policy, isolation, leader lease, config store, `/metrics` + alerts | `orch.*`, `store.*`, `os.sandbox` |
+| **`orchctl`** | ops | an OFFLINE operator CLI over a config-store backup dump: inspect, edit cluster membership, print a rolling-upgrade plan | `orch.membership`, `orch.backup`, `orch.rollout` |
 
 They share no process and forward nothing to each other directly. The **only** coupling is a
 service-discovery file, and it is fully wired:

@@ -23,8 +23,11 @@ echo "Building proxyd (data plane)..."
 nova build --file bin/proxyd.nova -o "$outdir/proxyd" $profile_flag >/dev/null
 echo "Building orchd (control plane)..."
 nova build --file bin/orchd.nova -o "$outdir/orchd" $profile_flag >/dev/null
+echo "Building orchctl (operator CLI)..."
+nova build --file bin/orchctl.nova -o "$outdir/orchctl" $profile_flag >/dev/null
 echo "Built:"
 echo "  $outdir/proxyd"
 echo "  $outdir/orchd"
+echo "  $outdir/orchctl"
 echo
 echo "Validate a config without serving:  $outdir/proxyd proxyd.json --check"

@@ -150,6 +150,23 @@ pub struct LeaderLease {
         return true;
     }
 
+    // Voluntarily give up leadership (DRAIN, for a rolling upgrade): write the lease back as EXPIRED at the
+    // current epoch so a standby's next tryAcquire takes over immediately (bumping the epoch) instead of
+    // waiting out the TTL. Keeps the fencing high-water mark intact. No-op for a non-leader. Returns true if
+    // it drained. After this the node is a standby and stillLeader() is false.
+    pub fn release(self: LeaderLease, nowMs: long): bool {
+        if (!self.isLeader) { return false; }
+        if (!self.store.exists(self.key)) { self.isLeader = false; return false; }
+        let cur = self.store.get(self.key) ?? config.ConfigEntry("", "", 0);
+        let st = decodeLease(cur.value);
+        if (!string.eql(st.holder, self.nodeId) || st.epoch != self.myEpoch) { self.isLeader = false; return false; }
+        // Expired lease at the same epoch: a standby sees "not mine + expired" and takes over at epoch+1.
+        let val = encodeLease(self.nodeId, self.myEpoch, nowMs);
+        let _ = self.store.cas(self.key, val, cur.revision);
+        self.isLeader = false;
+        return true;
+    }
+
     // The epoch currently recorded in the store's lease row (0 if the lease is absent). The fencing
     // high-water mark: any actor whose epoch is below this has been superseded.
     pub fn currentEpoch(self: LeaderLease): long {
