@@ -1,0 +1,187 @@
+// orch/manifest.nova — the DECLARATIVE app manifest (YAML), the single source of truth for a workload.
+//
+// One YAML document describes everything the control plane needs to run and front an app: the binary
+// and how many replicas to keep (a min/max band), the autoscaler policy, the load-balancer strategy,
+// health probing, network exposure, HTTP routes, and resource limits. It replaces the scattered
+// config (proxyd.json + env vars + code-configured autoscaler): orchd loads these manifests, the
+// gateway reads the LB/exposure, and the autoscaler reads its gains — all from here.
+//
+// Parsed with the compiler-generated binder over YAML: `Manifest__bind(source.fromYaml(text))`. Every
+// nested struct is @serializable with a zero-arg init() that sets defaults, so a partial manifest
+// fills in sensible values. Shape (see examples/manifests/shop.yaml):
+//
+//   apiVersion: nova/v1
+//   kind: App
+//   metadata: { name: shop }
+//   workload: { binary: ./bin/webapp, args: [], restartPolicy: always }
+//   replicas: { min: 2, max: 6 }
+//   autoscale: { enabled: true, metric: inflight, setpoint: 8, kp: 0.8, ki: 0.1, kd: 0.0, intervalMs: 2000 }
+//   lb: { strategy: roundrobin, handoff: true }
+//   health: { path: /healthz, intervalMs: 2000, timeoutMs: 1000, rise: 2, fall: 3 }
+//   network: { expose: gateway-only }
+//   routes: [ /api/products, /api/orders ]
+//   resources: { cpuMilli: 500, memMaxBytes: 268435456, pidsMax: 128 }
+import serde.source;
+import io.file;
+import string;
+import list;
+
+@serializable
+struct Metadata {
+    pub name: string,        // unique workload key
+    init() { self.name = ""; }
+}
+
+@serializable
+struct Workload {
+    pub binary: string,          // native executable to run per replica
+    pub args: List<string>,      // argv (excluding the binary and the injected port)
+    pub restartPolicy: string,   // always | on-failure | never
+    init() {
+        self.binary = "";
+        self.args = List<string>();
+        self.restartPolicy = "always";
+    }
+}
+
+// The replica band the autoscaler operates within. A fixed count is min == max.
+@serializable
+struct Replicas {
+    pub min: int,
+    pub max: int,
+    init() { self.min = 1; self.max = 1; }
+}
+
+// PID autoscaler policy. metric selects the regulated signal: "inflight" (in-flight requests, the
+// gateway's own load metric) or "cpu" (the workload cgroup's CPU utilisation, Linux). The controller is
+// direct-acting, output clamped to [replicas.min, replicas.max]. See net/autoscale.PidController.
+@serializable
+struct Autoscale {
+    pub enabled: bool,
+    pub metric: string,          // inflight | cpu
+    pub setpoint: double,        // target value of the metric
+    pub kp: double,
+    pub ki: double,
+    pub kd: double,
+    pub intervalMs: int,         // control loop period
+    init() {
+        self.enabled = false;
+        self.metric = "inflight";
+        self.setpoint = 0.0;
+        self.kp = 0.5;
+        self.ki = 0.1;
+        self.kd = 0.0;
+        self.intervalMs = 2000;
+    }
+}
+
+// Load-balancer facing this app. `handoff` selects the fire-and-forget fd-passing data path (the app
+// receives client sockets over the gateway's AF_UNIX rendezvous and is NOT exposed on a TCP port);
+// otherwise the gateway byte-forwards to the replicas.
+@serializable
+struct Lb {
+    pub strategy: string,        // roundrobin | weighted | leastconn | consistenthash
+    pub handoff: bool,
+    init() { self.strategy = "roundrobin"; self.handoff = false; }
+}
+
+@serializable
+struct Health {
+    pub path: string,            // "" = TCP-connect probe; non-empty = HTTP GET, expect 2xx/3xx
+    pub intervalMs: int,
+    pub timeoutMs: int,
+    pub rise: int,               // consecutive OK probes to return a backend to rotation
+    pub fall: int,               // consecutive failed probes to drain a backend
+    init() {
+        self.path = "/healthz";
+        self.intervalMs = 2000;
+        self.timeoutMs = 1000;
+        self.rise = 2;
+        self.fall = 3;
+    }
+}
+
+// Network exposure INTENT. The isolation implementation is platform-selected (like the reactor backend):
+// "gateway-only" => the app is reachable ONLY through the gateway — via fd-handoff on macOS/Windows (the
+// app has no listening TCP port) or a veth + network namespace on Linux; "public" => the app binds a
+// host port directly (dev convenience, not for production).
+@serializable
+struct Network {
+    pub expose: string,          // gateway-only | public
+    init() { self.expose = "gateway-only"; }
+}
+
+// cgroups-v2 resource limits (Linux; 0 = unset). cpuMilli is milli-CPU (500 = 0.5 core).
+@serializable
+struct Resources {
+    pub cpuMilli: int,
+    pub memMaxBytes: long,
+    pub pidsMax: int,
+    init() { self.cpuMilli = 0; self.memMaxBytes = 0; self.pidsMax = 0; }
+}
+
+@serializable
+struct Manifest {
+    pub apiVersion: string,
+    pub kind: string,
+    pub metadata: Metadata,
+    pub workload: Workload,
+    pub replicas: Replicas,
+    pub autoscale: Autoscale,
+    pub lb: Lb,
+    pub health: Health,
+    pub network: Network,
+    pub resources: Resources,
+    pub routes: List<string>,
+    init() {
+        self.apiVersion = "nova/v1";
+        self.kind = "App";
+        self.metadata = Metadata();
+        self.workload = Workload();
+        self.replicas = Replicas();
+        self.autoscale = Autoscale();
+        self.lb = Lb();
+        self.health = Health();
+        self.network = Network();
+        self.resources = Resources();
+        self.routes = List<string>();
+    }
+}
+
+// Parse a YAML manifest string into a Manifest (defaults fill any absent field).
+pub fn parseManifest(text: string): Manifest {
+    return Manifest__bind(source.fromYaml(text));
+}
+
+// Load and parse a manifest file. Returns a Manifest with all-default fields if the file is missing
+// (validate() then reports the empty name/binary).
+pub fn loadManifest(path: string): Manifest {
+    if (!file.File.exists(path)) { return Manifest(); }
+    return parseManifest(file.File.readText(path));
+}
+
+fn oneOf(v: string, a: string, b: string, c: string, d: string): bool {
+    return string.eql(v, a) || string.eql(v, b) || string.eql(v, c) || string.eql(v, d);
+}
+
+// Validate a manifest; returns "" when valid, else the first problem. Keeps the control plane from
+// acting on a nonsensical spec (empty name/binary, an inverted replica band, an unknown enum).
+pub fn validateManifest(m: Manifest): string {
+    if (string.eql(m.metadata.name, "")) { return "metadata.name is required"; }
+    if (string.eql(m.workload.binary, "")) { return "workload.binary is required"; }
+    if (m.replicas.min < 1) { return "replicas.min must be >= 1"; }
+    if (m.replicas.max < m.replicas.min) { return "replicas.max must be >= replicas.min"; }
+    if (!oneOf(m.lb.strategy, "roundrobin", "weighted", "leastconn", "consistenthash")) {
+        return "lb.strategy must be roundrobin | weighted | leastconn | consistenthash";
+    }
+    if (!string.eql(m.network.expose, "gateway-only") && !string.eql(m.network.expose, "public")) {
+        return "network.expose must be gateway-only | public";
+    }
+    if (m.autoscale.enabled) {
+        if (!string.eql(m.autoscale.metric, "inflight") && !string.eql(m.autoscale.metric, "cpu")) {
+            return "autoscale.metric must be inflight | cpu";
+        }
+        if (m.autoscale.setpoint <= 0.0) { return "autoscale.setpoint must be > 0 when autoscaling"; }
+    }
+    return "";
+}

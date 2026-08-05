@@ -1,0 +1,40 @@
+# Declarative app manifest — the single source of truth the control plane acts on.
+apiVersion: nova/v1
+kind: App
+metadata:
+  name: shop
+workload:
+  binary: ./build/release/bin/webapp
+  args:
+    - --config
+    - prod
+  restartPolicy: always
+replicas:
+  min: 2
+  max: 6
+autoscale:
+  enabled: true
+  metric: inflight       # inflight (gateway load) | cpu (cgroup, Linux)
+  setpoint: 8
+  kp: 0.8
+  ki: 0.1
+  kd: 0.0
+  intervalMs: 2000
+lb:
+  strategy: roundrobin   # roundrobin | weighted | leastconn | consistenthash
+  handoff: true          # fd-passing data path; app has no public TCP port
+health:
+  path: /healthz
+  intervalMs: 2000
+  timeoutMs: 1000
+  rise: 2
+  fall: 3
+network:
+  expose: gateway-only   # gateway-only (handoff on mac/win, veth on linux) | public
+routes:
+  - /api/products
+  - /api/orders
+resources:
+  cpuMilli: 500
+  memMaxBytes: 268435456
+  pidsMax: 128
