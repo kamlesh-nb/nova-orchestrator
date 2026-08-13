@@ -72,6 +72,24 @@ service service.json --check      # validate the config and exit 0/1 WITHOUT ser
 orchd  orchd.json               # reconcile loop; ORCHD_CONFIG=... ; orchd --check to lint
 ```
 
+### Cross-compiling (host build matrix)
+
+The nova toolchain cross-compiles from any host (macOS, Windows, WSL/Linux). Pass `--target <triple>` to
+`build.sh`; the cross binaries land under `build/<profile>/<triple>/bin/`:
+
+```sh
+./build.sh --target linux-x86_64        # Linux x86_64
+./build.sh --target linux-arm64         # Linux aarch64
+./build.sh --target macos-x86_64        # macOS x86_64 (intel)
+./build.sh --target macos-arm64         # macOS aarch64 (arm64)
+./build.sh --release --target windows-x86_64   # Windows x86_64 (produces .exe)
+```
+
+Windows aarch64 is the one target of the six-way matrix we cannot produce today: the nova compiler does
+not accept `windows-arm64` as a `--target` yet (only the five triples above are wired in the compiler), so
+`./build.sh --target windows-arm64` fails fast with a clear message. Adding the triple to the compiler
+(`lang/src/main.zig`) is what unblocks it.
+
 `service.json`:
 
 ```json
