@@ -210,6 +210,12 @@ pub struct Pool {
     pub fn addWeighted(self: Pool, host: string, port: int, weight: int): void {
         let b = Backend(host, port);
         b.weight = if (weight > 0) weight else 1;
+        // T1-2 readiness gate: when active health checking is on, a newly-added backend starts DRAINED
+        // (up=0) and only enters rotation after hcRise consecutive successful probes. So a just-spawned,
+        // not-yet-listening replica (initial start or a rolling-deploy addition) never receives and drops
+        // traffic before it can serve. With health checks OFF there is no probe to raise it, so it stays in
+        // rotation immediately (assume-ready), preserving the previous behaviour for unhealth-checked pools.
+        if (self.hcEnabled) { b.up = 0; b.okStreak = 0; }
         let idx = self.backends.size();
         self.backends.push(b);
         let w = 0;
