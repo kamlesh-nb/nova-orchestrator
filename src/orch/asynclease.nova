@@ -34,7 +34,25 @@ pub struct AsyncLeaderLease {
     // Try to become leader: CAS-create when the lease is free, CAS-on-revision takeover when expired (or
     // ours), epoch bumped each takeover; stay standby if another node holds a live lease. Returns whether
     // this node holds the lease after the call.
+    // C-T2-2 (F-2): the quorum gate, previously dead code. Every configured member row lives under the
+    // "members/" prefix in the shared store, so a node that can read the store sees the whole configured
+    // set; a node partitioned away from the store cannot list() at all and so cannot pass this gate or run
+    // the CAS. When members ARE configured, only a registered member may take the lease (a stray node
+    // cannot hijack it), and the reachable count must meet N/2+1. When NO members are registered the
+    // cluster is in single-orchd / legacy mode (the slice does not register membership) and election is
+    // allowed unchanged. The CAS (one winner per epoch) remains the primary split-brain arbiter; this gate
+    // is defence in depth for the multi-orchd topology.
+    async fn hasQuorum(self: AsyncLeaderLease): bool {
+        let mem = await self.store.list("members/");
+        let n = mem.size();
+        if (n == 0) { return true; }                 // membership not configured -> single-node mode
+        let q = n / 2 + 1;
+        if (n < q) { return false; }                 // fewer than a majority reachable via the store
+        return await self.store.exists("members/" + self.nodeId); // must be a registered member
+    }
+
     pub async fn tryAcquire(self: AsyncLeaderLease, nowMs: long): bool {
+        if (!(await self.hasQuorum())) { self.isLeader = false; return false; }
         let has = await self.store.exists(self.key);
         if (!has) {
             let val = lease.encodeLease(self.nodeId, 1, nowMs + self.ttlMs);
