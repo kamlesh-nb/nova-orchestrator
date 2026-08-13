@@ -10,11 +10,18 @@
 import process;
 import list;
 import string;
+import datetime;
 import orch.spec;
 import orch.isolation;
 import os.sandbox;
 import net.netns;
 import env;
+
+// T1-3 graceful-drain window: how long (ms) a replica is given to finish in-flight requests and exit on
+// SIGTERM before it is SIGKILLed. A generous default for a fast web app; a stop returns the instant the
+// process exits, so this is only an upper bound on an app that ignores SIGTERM. Lift to spec.Spec for a
+// per-workload override when a rolling-update controller (T1-1) needs it.
+const TERMINATION_GRACE_MS: long = 3000;
 
 pub struct Supervisor {
     pub spec: spec.Spec,
@@ -160,17 +167,23 @@ pub struct Supervisor {
         self.ports.push(port);
     }
 
-    // SIGTERM a replica, give it a brief grace window (polling for exit), then SIGKILL if still alive,
-    // reap, and free. Blocking wait is avoided — the grace loop polls tryWait.
+    // T1-3 graceful drain: SIGTERM the replica, give it a REAL timed grace window to finish in-flight
+    // requests and exit, then SIGKILL only if it overruns, then reap. The old loop polled tryWait 50 times
+    // with no delay, so SIGKILL followed SIGTERM within microseconds (effectively no grace). This polls
+    // against a WALL-CLOCK deadline instead: it returns the instant the process exits (typically fast once
+    // the app has drained), so the full window is spent only on an app that ignores SIGTERM. There is no
+    // sync sleep primitive in a sync method, so this is a bounded busy-poll; a stop is rare (scale-down or
+    // rolling deploy) and the window is short, so the cost is acceptable for a single-orchd control plane.
     fn stopProc(self: Supervisor, p: process.Process): void {
-        let _ = p.terminate();                 // SIGTERM
-        let tries = 0;
-        while (tries < 50) {                   // ~50 polls; caller paces via reconcile cadence anyway
-            if (p.tryWait() != -2) { break; }  // exited
-            tries = tries + 1;
+        let _ = p.terminate();                                  // SIGTERM: drain and exit cleanly
+        let startNs = datetime.nowNs();
+        let graceNs: long = TERMINATION_GRACE_MS * 1000000;     // ms -> ns
+        while (true) {
+            if (p.tryWait() != -2) { break; }                   // exited within the grace window
+            if (datetime.nowNs() - startNs >= graceNs) { break; }
         }
-        if (p.tryWait() == -2) { let _ = p.forceKill(); }  // still alive → SIGKILL
-        let _ = p.wait();                       // reap (returns immediately once dead)
+        if (p.tryWait() == -2) { let _ = p.forceKill(); }       // overran the grace -> SIGKILL
+        let _ = p.wait();                                       // reap (returns immediately once dead)
         p.close();
     }
 
