@@ -16,6 +16,12 @@ import string;
 import list;
 import bytes;
 
+// T1-5 backpressure: the maximum number of in-flight client coroutines a single reactor will service at
+// once. Beyond this a new connection is shed (closed) to bound memory (each client holds a 64 KB buffer)
+// rather than let a spike OOM the proxy. Set well above any expected steady-state concurrency so it never
+// bites normal load; it is a safety valve, not a throttle.
+const MAX_INFLIGHT_PER_REACTOR = 4096;
+
 // ---------------------------------------------------------------------------
 // Backend pool + load-balancing selection (round-robin / weighted / least-conn / consistent-hash)
 // ---------------------------------------------------------------------------
@@ -148,6 +154,11 @@ pub struct Pool {
     pub wexpanded: List<int>, // Weighted: backend indices repeated by weight (rebuilt on add)
     pub ringHash: List<int>,  // ConsistentHash ring: parallel (hash, backendIdx), UNSORTED (scanned)
     pub ringIdx: List<int>,
+    // T1-5 data-plane backpressure: PER-REACTOR count of in-flight client coroutines (lock-free, touched
+    // only by its own reactor, exactly like `cursors`). The accept loop increments before spawning a
+    // handler and the handler decrements when it finishes; at the cap a new connection is SHED (closed)
+    // rather than piling up unbounded coroutines + 64 KB buffers under a spike, which would OOM the proxy.
+    pub inflight: List<int>,
     // Active health checking (all default so an unconfigured Pool behaves exactly as before — every
     // backend stays up=1, so healthyFrom is a no-op passthrough and selection is unchanged).
     pub hcEnabled: bool,
@@ -169,9 +180,10 @@ pub struct Pool {
         self.hcRise = 2;
         self.hcFall = 3;
         self.hcPath = "";
+        self.inflight = List<int>();
         let nt = nova_worker_count() as int;
         let i = 0;
-        while (i < nt) { self.cursors.push(0); i = i + 1; }
+        while (i < nt) { self.cursors.push(0); self.inflight.push(0); i = i + 1; }
     }
 
     pub fn setStrategy(self: Pool, s: LbStrategy): void { self.strategy = s; }
@@ -713,14 +725,34 @@ async fn proxyAcceptLoop(pool: Pool, host: string, port: int, tmo: int): int {
         let rs = await eventedio.reactorAccept(lfd, kq);
         if (rs.isOpen()) {
             sys.setNonBlocking(rs.fdOf());          // reactor I/O needs a non-blocking accepted fd
-            // Pass the fd + kq as INTS, not the AsyncStream object: a struct handed across coroStart is
-            // not retained by the new coroutine, so it would be reclaimed during the backend await and the
-            // client fd would go garbage on the response write. handleClient rebuilds the stream locally
-            // (exactly how web/app.nova's serveReactorConn does it).
-            coroStart(handleClient(pool, rs.fdOf(), kq, tmo));
+            // T1-5 backpressure: bound in-flight client coroutines per reactor. At the cap, SHED the new
+            // connection (close it) rather than pile up unbounded coroutines + 64 KB buffers under a spike.
+            // The cap is high enough that normal load never reaches it; it is a safety valve against OOM.
+            let tid = nova_thread_id() as int;
+            let cur = pool.inflight.get(tid) ?? 0;
+            if (cur >= MAX_INFLIGHT_PER_REACTOR) {
+                let s = aio.AsyncStream(rs.fdOf()); s.kq = kq; s.close();
+            } else {
+                pool.inflight.set(tid, cur + 1);
+                // Pass the fd + kq as INTS, not the AsyncStream object: a struct handed across coroStart is
+                // not retained by the new coroutine, so it would be reclaimed during the backend await and
+                // the client fd would go garbage on the response write. handleClientCounted rebuilds the
+                // stream locally (like web/app.nova's serveReactorConn) and decrements the counter when done.
+                coroStart(handleClientCounted(pool, rs.fdOf(), kq, tmo, tid));
+            }
         }
     }
     return 0;
+}
+
+// T1-5: run handleClient, then decrement this reactor's in-flight counter. Under share-nothing the handler
+// stays on the reactor it was spawned on, so `tid` (captured at accept) targets the right counter.
+// handleClient returns normally on every path (it turns upstream/client errors into a response and closes
+// the client stream), so the decrement always runs and the counter stays balanced.
+async fn handleClientCounted(pool: Pool, fd: int, kq: int, tmo: int, tid: int): int {
+    let r = await handleClient(pool, fd, kq, tmo);
+    pool.inflight.set(tid, (pool.inflight.get(tid) ?? 1) - 1);
+    return r;
 }
 
 // P5 share-nothing fan-out: one accept loop per reactor (SO_REUSEPORT; the kernel load-balances clients
