@@ -67,7 +67,11 @@ pub struct Supervisor {
     // Lowest port at/above basePort not currently assigned to a live replica (so a replica restarted after
     // a middle death reclaims the freed port instead of colliding with a survivor). -1 when not exposed.
     fn nextFreePort(self: Supervisor): int {
-        if (self.spec.basePort <= 0 || string.eql(self.spec.portFlag, "")) { return -1; }
+        // A directly-exposed workload (basePort > 0) gets a distinct port per replica. The port is passed
+        // via NOVA_PORT env (the web framework's convention) always, and additionally via `portFlag` argv
+        // when the app takes a flag; so port assignment must NOT require a portFlag (a plain
+        // `app.run(NOVA_PORT)` workload has none).
+        if (self.spec.basePort <= 0) { return -1; }
         let p = self.spec.basePort;
         while (self.portInUse(p)) { p = p + 1; }
         return p;
@@ -144,15 +148,21 @@ pub struct Supervisor {
         }
 
         let port = self.nextFreePort();
-        // Build argv: the spec args plus the assigned port flag when this workload is directly exposed.
+        // Build argv: the spec args, plus the assigned port via `portFlag` ONLY when the app takes a flag.
+        // The port is also (and primarily) passed via the NOVA_PORT env below, which the Nova web framework
+        // reads, so a plain `app.run(NOVA_PORT)` replica gets its distinct port with no portFlag set.
         let args = self.spec.args;
-        if (port >= 0) {
+        if (port >= 0 && !string.eql(self.spec.portFlag, "")) {
             args = list.List<string>();
             let i = 0;
             while (i < self.spec.args.size()) { args.push(self.spec.args.get(i) ?? ""); i = i + 1; }
             args.push(self.spec.portFlag);
             args.push(`${port}`);
         }
+        // Pass the assigned port to the web framework via NOVA_PORT (its convention), set immediately before
+        // the synchronous spawn (the child captures it at exec) then cleared so a later spawn does not
+        // inherit it.
+        if (port >= 0) { env.set("NOVA_PORT", `${port}`); }
         // I4: isolationLevel>0 clone()s the child into namespaces + rootfs + dropped caps (+ seccomp at
         // level 3); level 0 is a plain spawn. Linux-only — degrades to a plain spawn elsewhere.
         let p = if (self.spec.isolationLevel <= 0)
@@ -161,6 +171,7 @@ pub struct Supervisor {
                     sandbox.spawn(self.spec.binaryPath, args, sandbox.level3(self.spec.rootfs, self.spec.name))
                 else
                     sandbox.spawn(self.spec.binaryPath, args, sandbox.level1(self.spec.rootfs, self.spec.name));
+        if (port >= 0) { env.set("NOVA_PORT", ""); }
         // Apply cgroups-v2 limits (Linux; best-effort no-op elsewhere) to the freshly-spawned child.
         let _ = isolation.applyLimits(self.spec, p.pid());
         self.procs.push(p);
