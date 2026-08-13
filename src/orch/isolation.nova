@@ -18,6 +18,14 @@ pub fn available(): bool {
     return file.File.exists("/sys/fs/cgroup/cgroup.controllers");
 }
 
+// Does this spec ask for ANY OS-level isolation or resource limit (cgroups CPU/mem/pids, a container
+// isolation level, or a network namespace)? Used to decide whether to REPORT that limits were requested
+// but could not be applied on this platform, so the orchestrator never silently runs unconstrained while a
+// manifest asked for a limit (acceptance bar item 6).
+pub fn requestsIsolation(sp: spec.Spec): bool {
+    return sp.cpuMilli > 0 || sp.memMaxBytes > (0 as long) || sp.pidsMax > 0 || sp.isolationLevel > 0 || sp.netns;
+}
+
 fn cgroupDir(name: string): string {
     return "/sys/fs/cgroup/nova/" + name;
 }

@@ -44,6 +44,7 @@ pub struct Supervisor {
     // in-process without spawning binaries (no timing races, unlike real processes). Injected via simCrash.
     pub simulated: bool,
     pub simReplicas: list.List<int>,
+    reportedIsolation: bool,   // logged the "isolation not applied" report once for this workload
     init(sp: spec.Spec) {
         self.spec = sp;
         self.procs = list.List<process.Process>();
@@ -53,6 +54,19 @@ pub struct Supervisor {
         self.manageProcesses = true;
         self.simulated = false;
         self.simReplicas = list.List<int>();
+        self.reportedIsolation = false;
+    }
+
+    // Acceptance bar item 6 (isolation is honest): if a workload asks for cgroup limits or a container/netns
+    // isolation level but this platform cannot apply them (no cgroups v2, i.e. not Linux), REPORT it once
+    // instead of silently running unconstrained while the manifest claims a limit. On Linux the limits are
+    // actually applied (isolation.applyLimits), so nothing is reported.
+    fn reportIsolationOnce(self: Supervisor): void {
+        if (self.reportedIsolation) { return; }
+        if (isolation.requestsIsolation(self.spec) && !isolation.available()) {
+            console.log(`orchd: workload '${self.spec.name}' requests resource limits or isolation, but this platform has no cgroups v2 (not Linux). Limits are NOT applied; the replicas run UNCONSTRAINED. This is reported, never silently claimed.`);
+        }
+        self.reportedIsolation = true;
     }
 
     fn portInUse(self: Supervisor, p: int): bool {
@@ -231,7 +245,7 @@ pub struct Supervisor {
         while (self.running() > self.spec.replicas) { self.killLast(); }
     }
 
-    pub fn start(self: Supervisor): void { self.ensureReplicas(); }
+    pub fn start(self: Supervisor): void { self.reportIsolationOnce(); self.ensureReplicas(); }
 
     // Reap any exited replicas and restart them per policy. Non-blocking (tryWait). A replica that exits
     // under an "always"/"on-failure" policy is replaced (counting a restart); under "never" it stays
