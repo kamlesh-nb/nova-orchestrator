@@ -16,11 +16,8 @@
 #   --target macos-x86_64     macOS x86_64 (intel)
 #   --target macos-arm64      macOS aarch64 (arm64)
 #   --target windows-x86_64   Windows x86_64  (produces .exe)
+#   --target windows-arm64    Windows aarch64 (produces .exe)
 # Cross binaries land in build/<profile>/<triple>/bin/. Example: ./build.sh --release --target linux-arm64
-#
-# NOTE (windows-arm64): the nova compiler does NOT yet accept windows-arm64 as a --target (only the five
-# triples above are wired in lang/src/main.zig). So Windows aarch64 is the one target of the six-way matrix
-# we cannot produce today; it needs the triple added to the compiler first.
 #
 # Native builds use `nova build` (the fast per-file object cache under build/<profile>/obj). Cross builds
 # use nova's single-file compile mode instead: the build-mode object cache is not target-aware, so mixing
@@ -50,12 +47,9 @@ done
 ext=""
 if [ -n "$target" ]; then
   case "$target" in
-    windows-x86_64) ext=".exe" ;;
-    windows-arm64)
-      echo "error: windows-arm64 is not supported by the nova compiler yet (see the NOTE at the top of this file)." >&2
-      exit 2 ;;
+    windows-x86_64|windows-arm64) ext=".exe" ;;
     linux-x86_64|linux-arm64|macos-x86_64|macos-arm64) ext="" ;;
-    *) echo "error: unknown --target '$target'. Supported: linux-x86_64 linux-arm64 macos-x86_64 macos-arm64 windows-x86_64" >&2; exit 2 ;;
+    *) echo "error: unknown --target '$target'. Supported: linux-x86_64 linux-arm64 macos-x86_64 macos-arm64 windows-x86_64 windows-arm64" >&2; exit 2 ;;
   esac
   outdir="build/$profile/$target/bin"
 else
