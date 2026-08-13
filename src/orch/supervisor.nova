@@ -245,6 +245,37 @@ pub struct Supervisor {
         while (self.running() > self.spec.replicas) { self.killLast(); }
     }
 
+    // T1-1: adopt a new spec WITHOUT restarting anything. Subsequent spawns (and rollOne replacements) use
+    // it; the already-running replicas keep serving until they are individually rolled.
+    pub fn setSpec(self: Supervisor, sp: spec.Spec): void { self.spec = sp; }
+
+    // T1-1 rolling replace: retire the OLDEST replica gracefully (freeing its port) and spawn a fresh one
+    // (current spec) to take its place. One replica is down for the brief stop->start->ready window; the
+    // OTHER replicas keep serving and the data-plane proxy retries any request that hits the port mid-swap,
+    // so a rolling deploy drops zero requests. The freed port is reclaimed by nextFreePort, so the new
+    // replica takes the same port (the discovery set is unchanged).
+    pub fn rollOne(self: Supervisor): void {
+        if (self.simulated) {
+            if (self.simReplicas.size() > 0) { self.simReplicas.remove(0); if (self.ports.size() > 0) { self.ports.remove(0); } }
+            self.spawnOne();
+            return;
+        }
+        if (!self.manageProcesses) { return; }
+        if (self.procs.size() == 0) { self.spawnOne(); return; }
+        if (self.manageProcesses) {
+            let p = self.procs.get(0) ?? process.Process.spawn("/bin/true", list.List<string>());
+            self.stopProc(p);
+        }
+        self.procs.remove(0);
+        if (self.ports.size() > 0) { self.ports.remove(0); }
+        if (self.spec.netns && self.netnsSlots.size() > 0) {
+            let slot = self.netnsSlots.get(0) ?? -1;
+            if (slot >= 0 && self.manageProcesses) { let _ = netns.teardown(netns.plan(self.spec.name, slot)); }
+            self.netnsSlots.remove(0);
+        }
+        self.spawnOne();
+    }
+
     pub fn start(self: Supervisor): void { self.reportIsolationOnce(); self.ensureReplicas(); }
 
     // Reap any exited replicas and restart them per policy. Non-blocking (tryWait). A replica that exits

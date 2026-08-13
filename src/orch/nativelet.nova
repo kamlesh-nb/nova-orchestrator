@@ -22,6 +22,11 @@ import store.config;
 // How many consecutive failed HTTP probes drain a workload's patience before it is restarted.
 const PROBE_FAIL_LIMIT = 3;
 
+// T1-1: reconcile ticks to wait after replacing one replica before replacing the next, so the just-started
+// replica has time to bind and be raised into the load balancer's rotation (the data-plane readiness gate)
+// before the workload loses another. With reconcileMs ~1s and health rise ~1-2 probes, a few ticks is ample.
+const ROLL_GRACE_TICKS = 4;
+
 // T1-4 torn-free write: write to a sibling temp file, then rename over the target. rename(2) is atomic
 // within a filesystem (temp and target share the directory, hence the filesystem), so a concurrent reader
 // on the data plane sees either the old discovery file or the complete new one, never a half-written file
@@ -60,16 +65,25 @@ pub struct ScanEntry {
     }
 }
 
-pub struct Job {
+// A class (reference) so the reconcile loop can mutate its roll state in place across ticks.
+pub class Job {
     pub name: string,
     pub sup: supervisor.Supervisor,
     pub desired: spec.Spec,     // the spec this supervisor was started from (for change detection)
     pub probeFails: int,        // consecutive failed HTTP probes (→ restart at PROBE_FAIL_LIMIT)
+    // T1-1 rolling-update state. When a spec change is detected, `rolling` is set and the reconcile loop
+    // replaces one replica per grace window (rollOne) until `rollLeft` reaches 0, keeping the others up.
+    pub rolling: bool,
+    pub rollLeft: int,          // replicas still to replace this roll
+    pub rollGrace: int,         // ticks to wait for the just-replaced replica to become ready
     init(name: string, sup: supervisor.Supervisor, desired: spec.Spec) {
         self.name = name;
         self.sup = sup;
         self.desired = desired;
         self.probeFails = 0;
+        self.rolling = false;
+        self.rollLeft = 0;
+        self.rollGrace = 0;
     }
 }
 
@@ -311,14 +325,30 @@ pub struct Nativelet {
                 }
             } else if (at >= 0) {
                 let job = self.jobs.get(at) ?? Job("", supervisor.Supervisor(spec.Spec("", "")), spec.Spec("", ""));
-                if (!spec.specsEqual(job.desired, m.spec)) {
-                    // Spec changed → stop the old supervisor and replace the job with a fresh one.
-                    job.sup.stopAll();
-                    let sup = supervisor.Supervisor(m.spec);
-                    sup.manageProcesses = self.manageProcesses;
-                    sup.simulated = self.simulated;
-                    sup.start();
-                    self.jobs.set(at, Job(m.key, sup, m.spec));
+                if (job.rolling) {
+                    // T1-1 roll in progress: keep the healthy replicas up, then advance one step per grace
+                    // window. Replace the oldest replica, wait ROLL_GRACE_TICKS for it to be raised into the
+                    // LB, then the next, until every replica runs the new spec. At all times replicas-1 stay
+                    // serving and the data-plane proxy retries around the one being swapped -> zero drops.
+                    job.sup.poll();
+                    if (job.rollGrace > 0) {
+                        job.rollGrace = job.rollGrace - 1;
+                    } else if (job.rollLeft > 0) {
+                        job.sup.rollOne();
+                        job.rollLeft = job.rollLeft - 1;
+                        job.rollGrace = ROLL_GRACE_TICKS;
+                    } else {
+                        job.rolling = false;         // roll complete
+                    }
+                } else if (!spec.specsEqual(job.desired, m.spec)) {
+                    // Spec changed -> begin a ROLLING replace instead of a hard bounce. Adopt the new spec so
+                    // rollOne's respawns use it, and remember it as desired (so the change is not re-detected
+                    // every tick). The running old-spec replicas keep serving until each is rolled.
+                    job.sup.setSpec(m.spec);
+                    job.desired = m.spec;
+                    job.rolling = true;
+                    job.rollLeft = if (m.spec.replicas > 0) m.spec.replicas else 1;
+                    job.rollGrace = 0;
                 } else {
                     job.sup.poll();                  // unchanged → restart any crashed replicas
                 }

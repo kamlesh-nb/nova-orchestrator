@@ -607,18 +607,28 @@ async fn handleClient(pool: Pool, fd: int, kq: int, tmo: int): int {
         let req = await readMessage(client, false, tmo);
         if (string.eql(req.bytes, "")) { alive = false; break; }  // client closed / error
 
-        let b = pool.select(reqKey(req.bytes));   // key used only by ConsistentHash; others ignore it
-        if (b.port == 0) {
-            let _ = await client.sendStr(errorResponse(502, "Bad Gateway", "no backends"));
-            alive = false;
-            break;
+        // Retry on a DEAD/DRAINING backend: if forwarding fails (e.g. the replica was just killed or is
+        // mid-restart during a rolling deploy), select AGAIN (round-robin advances to the next backend) and
+        // retry, up to 3 backends, before giving a 502. A failed forward also nudges that backend toward
+        // drained via observe(), so the LB stops picking it sooner. This is what turns a rolling deploy /
+        // replica loss into ZERO dropped requests instead of a burst of 502s while the health checks catch
+        // up. Safe for the idempotent GET traffic the platform slice serves; a production proxy would gate
+        // the retry on request idempotency.
+        let attempts = 0;
+        let resp = "";
+        let served = false;
+        while (attempts < 3) {
+            let b = pool.select(reqKey(req.bytes));   // key used only by ConsistentHash; others ignore it
+            if (b.port == 0) { break; }               // no backend is up at all
+            b.acquireConn();                          // LeastConn in-flight accounting (per-reactor)
+            resp = await forward(b, req.bytes, req.wantClose, tmo);
+            b.releaseConn();
+            if (!string.eql(resp, "")) { served = true; break; }
+            b.observe(false, pool.hcRise, pool.hcFall);   // failed upstream -> nudge it out of rotation
+            attempts = attempts + 1;
         }
-
-        b.acquireConn();                          // LeastConn in-flight accounting (per-reactor, lock-free)
-        let resp = await forward(b, req.bytes, req.wantClose, tmo);
-        b.releaseConn();
-        if (string.eql(resp, "")) {
-            let _ = await client.sendStr(errorResponse(502, "Bad Gateway", "upstream error"));
+        if (!served) {
+            let _ = await client.sendStr(errorResponse(502, "Bad Gateway", "no healthy upstream"));
             alive = false;
             break;
         }
