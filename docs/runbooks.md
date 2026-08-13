@@ -147,3 +147,28 @@ Every shipped frame is CRC32'd; a corrupt frame is rejected at the deserialize b
 If a stored PAGE is corrupt (checksum/`InvalidChecksum` on open): restore from the most recent good backup
 (section 6), or PITR to just before the corruption (section 7). Do not run against a db that logs checksum
 errors on open -- snapshot the WAL first if you need forensic data, then restore.
+
+## 11. Deploy / scale / tear down from the browser (orchweb)
+
+`orchweb` is the writable web control plane (a Tailwind web app under `webui/`: a node -> service -> replica
+tree, click a service for its manifest form, click a node to deploy). It does not reconcile anything itself:
+every action writes desired state into the SAME config store `orchd` reconciles from, so a click is applied
+by the leader `orchd`'s reconcile loop.
+
+Run it beside the cluster:
+1. Point it at the store: `NOVA_ORCHWEB_DSN=novadb://admin@<btree-host>:3009?db=nova`, `NOVA_PORT=8130`.
+2. Start `build/*/bin/orchweb`; open `http://127.0.0.1:8130`. The table refreshes every 2s from the store.
+
+- DEPLOY / update: paste a manifest YAML and click Deploy. It is validated (a bad manifest is rejected with
+  the reason, nothing is written) then stored canonically at `workloads/<name>`. The leader `orchd` starts or
+  updates the workload on its next tick.
+- SCALE: set the app name + min/max and click Scale (the per-row Load button fills these in). It rewrites the
+  stored manifest's replica band in place; `orchd` converges to the new count.
+- TEAR DOWN: the per-row button deletes `workloads/<name>`. `orchd` then stops that workload's replicas.
+
+VERIFY an action took effect without the UI: `orchctl inspect` over a store dump shows the workloads/ keys,
+and `orch_workload_desired`/`_running` in `/metrics` move to the new count.
+
+NOTE: orchweb is read-write against the store but holds NO lease and drives NO processes. If the store is
+down, actions fail loudly (the status line goes red) and nothing changes -- exactly like `orchctl`. Run one
+`orchweb` per cluster (it is stateless; a second instance is harmless but redundant).

@@ -199,6 +199,74 @@ pub fn validateManifest(m: Manifest): string {
     return "";
 }
 
+// Emit a Manifest back to canonical YAML — the inverse of parseManifest, so a control plane can store a
+// deployed app in one consistent form and rewrite it (e.g. scale replicas) without hand-editing text. The
+// field ORDER is fixed and readable (unlike the map-ordered serde.yaml.stringify), and every field the
+// schema models is emitted, so parseManifest(toYaml(m)) round-trips m for all behaviour-bearing fields.
+// A double is rendered via string interpolation; a bool as the literal true/false YAML expects.
+fn yamlBool(b: bool): string { return if (b) "true" else "false"; }
+
+pub fn toYaml(m: Manifest): string {
+    let out = list.List<string>();
+    out.push(`apiVersion: ${m.apiVersion}`);
+    out.push(`kind: ${m.kind}`);
+    out.push("metadata:");
+    out.push(`  name: ${m.metadata.name}`);
+    out.push("workload:");
+    out.push(`  binary: ${m.workload.binary}`);
+    out.push(`  restartPolicy: ${m.workload.restartPolicy}`);
+    if (m.workload.args.size() > 0) {
+        out.push("  args:");
+        let a = 0;
+        while (a < m.workload.args.size()) { out.push(`    - ${m.workload.args.get(a) ?? ""}`); a = a + 1; }
+    }
+    out.push("replicas:");
+    out.push(`  min: ${m.replicas.min}`);
+    out.push(`  max: ${m.replicas.max}`);
+    // The autoscale gains only matter when enabled; emit the full block then so a scale round-trips them,
+    // and just the disabled flag otherwise (validateManifest ignores the rest when disabled).
+    out.push("autoscale:");
+    out.push(`  enabled: ${yamlBool(m.autoscale.enabled)}`);
+    if (m.autoscale.enabled) {
+        out.push(`  metric: ${m.autoscale.metric}`);
+        out.push(`  setpoint: ${m.autoscale.setpoint}`);
+        out.push(`  kp: ${m.autoscale.kp}`);
+        out.push(`  ki: ${m.autoscale.ki}`);
+        out.push(`  kd: ${m.autoscale.kd}`);
+        out.push(`  intervalMs: ${m.autoscale.intervalMs}`);
+    }
+    out.push("lb:");
+    out.push(`  strategy: ${m.lb.strategy}`);
+    out.push(`  handoff: ${yamlBool(m.lb.handoff)}`);
+    out.push("health:");
+    out.push(`  path: ${m.health.path}`);
+    out.push(`  intervalMs: ${m.health.intervalMs}`);
+    out.push(`  timeoutMs: ${m.health.timeoutMs}`);
+    out.push(`  rise: ${m.health.rise}`);
+    out.push(`  fall: ${m.health.fall}`);
+    out.push("network:");
+    out.push(`  expose: ${m.network.expose}`);
+    // portBase/portFlag only bind an app under expose: public; emit them there so the round-trip is exact.
+    if (string.eql(m.network.expose, "public")) {
+        out.push(`  portBase: ${m.network.portBase}`);
+        if (!string.eql(m.network.portFlag, "")) { out.push(`  portFlag: ${m.network.portFlag}`); }
+    }
+    out.push(`  servicePort: ${m.network.servicePort}`);
+    // Resource limits (Linux cgroups); emit only when at least one is set to keep the manifest clean.
+    if (m.resources.cpuMilli > 0 || m.resources.memMaxBytes > 0 || m.resources.pidsMax > 0) {
+        out.push("resources:");
+        out.push(`  cpuMilli: ${m.resources.cpuMilli}`);
+        out.push(`  memMaxBytes: ${m.resources.memMaxBytes}`);
+        out.push(`  pidsMax: ${m.resources.pidsMax}`);
+    }
+    if (m.routes.size() > 0) {
+        out.push("routes:");
+        let r = 0;
+        while (r < m.routes.size()) { out.push(`  - ${m.routes.get(r) ?? ""}`); r = r + 1; }
+    }
+    return string.join(out, "\n") + "\n";
+}
+
 // Lower a Manifest to the supervisor's Spec — the seam between the declarative surface and the process
 // runner. The supervisor keeps `replicas` copies running; the INITIAL desired count is replicas.min, and
 // the control-plane autoscaler later drives spec.replicas within [replicas.min, replicas.max]. Exposure:

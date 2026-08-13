@@ -18,17 +18,31 @@ It bundles the whole I1–I4 infrastructure tier:
 | `orch.autoscaler` | PID-driven replica autoscaling for a workload. |
 | `os.sandbox`      | Container-grade isolation dial (levels 0/1/3): Linux namespaces + private rootfs + dropped caps + seccomp. |
 
-## Two binaries: data plane and control plane
+## Four binaries: data plane, control plane, and the operator surfaces
 
-The stack ships as **two separate binaries** along the same data-plane / control-plane line Kubernetes
-draws between `kube-proxy` and the controller manager. Each entrypoint lives in `bin/` and pulls only its
-half of the package through the import graph, so dead-code elimination keeps the two genuinely separate.
+The stack ships as **separate binaries** along the same data-plane / control-plane line Kubernetes draws
+between `kube-proxy` and the controller manager. Each entrypoint lives in `bin/` and pulls only its slice
+of the package through the import graph, so dead-code elimination keeps them genuinely separate.
 
 | Binary | Plane | Owns | Modules |
 |--------|-------|------|---------|
 | **`service`** | data | traffic: L7 reverse proxy, load balancing, health-checked membership, service VIPs | `net.proxy`, `net.service`, `net.autoscale` |
 | **`orchd`**  | control | desired state: manifest reconcile, replica supervision, restart policy, isolation, leader lease, config store, `/metrics` + alerts | `orch.*`, `store.*`, `os.sandbox` |
 | **`orchctl`** | ops | an OFFLINE operator CLI over a config-store backup dump: inspect, edit cluster membership, print a rolling-upgrade plan | `orch.membership`, `orch.backup`, `orch.rollout` |
+| **`orchweb`** | ops | a WRITABLE control-plane UI (a Tailwind web app under `webui/`): a node -> service -> replica tree, click a service for its complete manifest as an editable form, click a node to deploy a service | `orch.controlplane`, `orch.manifest`, `store.sqlconfig`, `web.*` |
+
+`orchweb` is the live, browser-facing sibling of `orchctl` -- a full vertical-slice Nova web app
+(`webui/`, scaffolded like `nova init web`: `src/Features/ControlPlane/...`, `wwwroot/`, `project.json`).
+The sidebar is a tree of cluster nodes (`members/<id>`) -> services (`workloads/<name>`) -> desired replica
+slots. Clicking a service opens its complete manifest as an editable form; clicking a node opens a deploy
+screen. Navigation is server-rendered hypermedia (links + form POSTs, Tailwind for styling), so there is no
+client state to bind. Every deploy / save / tear down writes a canonical YAML manifest to the SAME config
+store under `workloads/<name>` (or deletes that key); the leader `orchd`'s reconcile loop
+(`asynclease.haReconcileTick` -> `nativelet.reconcileFromEntries`, which is manifest-aware) reads exactly
+those keys and converges the fleet. So an action actually spawns, scales, or stops workloads. Connects to
+NovaDB via `NOVA_ORCHWEB_DSN` (default `novadb://admin@127.0.0.1:3009?db=nova`), seeds the local node
+(`NOVA_ORCHWEB_NODE`, default `node-1`), and serves on `NOVA_PORT` (default 8130). Build: `./build.sh`
+(builds `webui/src/main.nova`).
 
 They share no process and forward nothing to each other directly. The **only** coupling is a
 service-discovery file, and it is fully wired:

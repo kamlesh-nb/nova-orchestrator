@@ -7,7 +7,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 lang="$here/../../lang"
 cd "$lang" || { echo "expected the Nova toolchain at $lang"; exit 1; }
 pass=0; fail=0
-for t in "$here"/tests/*.nova; do
+for t in "$here"/tests/*.nova "$here"/webui/tests/features/*.nova; do
   if nova test "$t" >/tmp/novaorch.log 2>&1 && grep -q "0 failed" /tmp/novaorch.log; then
     echo "PASS  $(basename "$t")"; pass=$((pass+1))
   else

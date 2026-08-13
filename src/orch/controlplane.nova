@@ -56,17 +56,7 @@ pub struct Registry {
 
     // The status read model for one app (parsed + summarised from its stored manifest).
     pub fn status(self: Registry, name: string): AppStatus {
-        let m = self.get(name);
-        let s = AppStatus();
-        s.name = m.metadata.name;
-        s.minReplicas = m.replicas.min;
-        s.maxReplicas = m.replicas.max;
-        s.autoscale = m.autoscale.enabled;
-        s.metric = m.autoscale.metric;
-        s.lb = m.lb.strategy;
-        s.isolation = manifest.isolationMode(m);
-        s.routes = m.routes.size();
-        return s;
+        return statusFromManifest(self.get(name));
     }
 
     pub fn statuses(self: Registry): list.List<AppStatus> {
@@ -76,6 +66,27 @@ pub struct Registry {
         while (i < ns.size()) { out.push(self.status(ns.get(i) ?? "")); i = i + 1; }
         return out;
     }
+}
+
+// The status read model for one manifest -- the summary shared by the in-memory Registry above and the
+// store-backed control plane (bin/orchweb), which reads raw manifest YAML straight out of the config
+// store. Kept free of any store/web coupling so both paths render an identical row.
+pub fn statusFromManifest(m: manifest.Manifest): AppStatus {
+    let s = AppStatus();
+    s.name = m.metadata.name;
+    s.minReplicas = m.replicas.min;
+    s.maxReplicas = m.replicas.max;
+    s.autoscale = m.autoscale.enabled;
+    s.metric = m.autoscale.metric;
+    s.lb = m.lb.strategy;
+    s.isolation = manifest.isolationMode(m);
+    s.routes = m.routes.size();
+    return s;
+}
+
+// The status read model parsed straight from a manifest YAML string (what orchweb stores per app).
+pub fn statusOf(yaml: string): AppStatus {
+    return statusFromManifest(manifest.parseManifest(yaml));
 }
 
 // JSON array of every app's status (GET /api/apps). Uses the serde-generated writer per element.
@@ -114,10 +125,16 @@ fn appsTable(ss: list.List<AppStatus>): string {
          + "<th>Routes</th></tr>" + rows + "</table>";
 }
 
+// The #apps fragment for a list of statuses (single line, no newlines) a Datastar patch-elements event
+// replaces the table with. Split from appsFragment so the store-backed control plane (orchweb), which
+// reads statuses out of the config store rather than the in-memory Registry, renders the identical block.
+pub fn appsFragmentFrom(ss: list.List<AppStatus>): string {
+    return `<div id="apps"><p>${ss.size()} app(s) deployed.</p>` + appsTable(ss) + "</div>";
+}
+
 // The #apps fragment (single line, no newlines) a Datastar patch-elements event replaces the table with.
 pub fn appsFragment(reg: Registry): string {
-    let ss = reg.statuses();
-    return `<div id="apps"><p>${ss.size()} app(s) deployed.</p>` + appsTable(ss) + "</div>";
+    return appsFragmentFrom(reg.statuses());
 }
 
 // A minimal self-contained HTML dashboard (GET /). One row per app, showing the read model.

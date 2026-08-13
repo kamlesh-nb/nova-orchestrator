@@ -22,6 +22,20 @@ import store.config;
 // How many consecutive failed HTTP probes drain a workload's patience before it is restarted.
 const PROBE_FAIL_LIMIT = 3;
 
+// Whether a store value is a raw JSON Spec (first non-space char is '{') rather than a YAML manifest.
+// Used by reconcileFromEntries to sniff the workload-descriptor form (a store value has no filename to
+// key off, unlike scan()'s ".json"/".yaml" split).
+fn startsWithJson(s: string): bool {
+    let i = 0;
+    let n = string.len(s);
+    while (i < n) {
+        let c = s[i];
+        if (c != 32 && c != 9 && c != 10 && c != 13) { return c == 123; }   // 123 = '{'
+        i = i + 1;
+    }
+    return false;
+}
+
 // One scanned manifest file: its filename-stem key, the parsed spec, and whether the parse succeeded.
 // valid=false means the file exists but couldn't be read/parsed THIS tick (keep, don't delete).
 pub struct ScanEntry {
@@ -205,10 +219,17 @@ pub struct Nativelet {
     // STORE-DRIVEN reconcile (config-store P1): converge toward desired state read from the config store
     // instead of the manifest directory. `entries` are the store rows under `prefix` (e.g. the result of
     // ConfigStore.list("workloads/") or `await SqlConfigStore.list("workloads/")`); each entry's key is
-    // "<prefix><name>" and its value is the JSON Spec. The daemon does the (possibly async) fetch and
-    // passes the entries here, so this stays sync + offline-testable and works with either store. The
+    // "<prefix><name>" and its value is a workload descriptor. The daemon does the (possibly async) fetch
+    // and passes the entries here, so this stays sync + offline-testable and works with either store. The
     // manifest dir becomes an optional bootstrap importer (load files into the store once), no longer the
     // source of truth. An empty value is treated like an unreadable manifest: keep a running workload.
+    //
+    // A store value is one of two forms, sniffed by its first non-space character (mirroring scan()'s
+    // file-extension split, since a store value has no filename):
+    //   - a declarative YAML Manifest (the default the web control plane / orchctl write) -- parsed via
+    //     manifest.parseManifest, validated, and lowered to a Spec by manifest.toSpec; this is the primary
+    //     form, keeping the manifest the single source of truth on the store path too, not only on disk;
+    //   - a raw JSON Spec starting with '{' (the legacy store form, still honoured for older stores).
     pub fn reconcileFromEntries(self: Nativelet, entries: list.List<config.ConfigEntry>, prefix: string): void {
         let ms = list.List<ScanEntry>();
         let i = 0;
@@ -220,13 +241,19 @@ pub struct Nativelet {
                 e.key;
             if (string.eql(e.value, "")) {
                 ms.push(ScanEntry(key, spec.Spec("", ""), false)); // present but empty → keep running
-            } else {
+            } else if (startsWithJson(e.value)) {
                 let sp = spec.parseSpec(e.value);
                 // Parse-then-VALIDATE (P4 rollout safety): a spec that parses but is semantically bad (empty
                 // binaryPath, unknown restartPolicy, bad isolation level, ...) is treated like an unreadable
                 // manifest -- reconcileScan then keeps the last-good workload running instead of replacing a
                 // healthy one with a broken spec. A brand-new workload with a bad spec is simply not started.
                 ms.push(ScanEntry(key, sp, string.eql(spec.validateSpec(sp), "")));
+            } else {
+                // YAML manifest form: same parse-then-validate rollout-safety contract, via the manifest
+                // schema (an invalid manifest -> valid=false -> reconcileScan keeps the last-good workload).
+                let mani = manifest.parseManifest(e.value);
+                let ok = string.eql(manifest.validateManifest(mani), "");
+                ms.push(ScanEntry(key, manifest.toSpec(mani), ok));
             }
             i = i + 1;
         }
