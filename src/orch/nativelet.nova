@@ -436,14 +436,22 @@ pub struct Nativelet {
 // One-shot async HTTP GET liveness probe: connect, send GET, read the status line, accept 2xx/3xx.
 // Any connect/read failure or a >=400 status is unhealthy. Fully non-blocking.
 async fn httpProbe(host: string, port: int, path: string, tmo: int): bool {
+    // Use the AsyncStream's OWN methods (sendStr/recvInto/close), not the retired free-function Asio hooks
+    // (aio.async_write / aio.async_read_deadline are dead stubs that return 0). On a reactor thread
+    // asyncConnect returns a REACTOR-NATIVE stream (kq set, sock = raw fd), and its methods route through
+    // net/reactorio; crucially s.close() DEREGISTERS the fd from the reactor. The old code closed the fd
+    // with a raw aclose(s.sock) that left the reactor registration dangling, so a later completion/event
+    // for that fd resumed an already-freed coroutine frame -> a garbage-handle resume that crashed orchd
+    // (BUS) within a few probe ticks of supervising a workload.
     let s = await aio.asyncConnect(host, port);
-    if (s.sock == 0) { return false; }
+    if (!s.ok()) { return false; }
     let req = `GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`;
-    let _ = await aio.async_write(s.sock, req);
+    let _ = await s.sendStr(req);
     let cap = 512;
     let buf = bytes.alloc(cap);
-    let n = await aio.async_read_deadline(s.sock, buf, cap, tmo);
-    aio.aclose(s.sock);
+    let _ = s.setTimeout(tmo);
+    let n = await s.recvInto(buf, cap);
+    s.close();
     if (n <= 12) { bytes.free(buf); return false; }   // need at least "HTTP/1.1 xxx"
     // status code is the 3 bytes after the first space (offset 9 in "HTTP/1.1 200")
     let c0 = bytes.read_byte(buf, 9);

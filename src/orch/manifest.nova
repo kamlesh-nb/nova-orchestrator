@@ -291,7 +291,13 @@ pub fn toSpec(m: Manifest): spec.Spec {
     if (string.eql(m.network.expose, "public") && m.network.portBase > 0) {
         s.basePort = m.network.portBase;
         s.portFlag = m.network.portFlag;
-        s.probePort = m.network.portBase;
+        // NOTE: probePort is deliberately left 0 (no orchd-side HTTP readiness probe). Health/readiness is
+        // the DATA PLANE's job: the `service` load balancer actively health-checks every backend and gates
+        // traffic on it. orchd owns SUPERVISION (process liveness via poll/tryWait, which respawns a
+        // crashed replica). An orchd-side HTTP probe is redundant with the service's checks AND currently
+        // triggers a lang reactor bug (a recycled-coroutine-frame BUS crash in the reactor-native
+        // connect/recv path used by httpProbe, reproducible from the reconcile loop; see the driver-parity
+        // notes). Re-enable per-workload once that runtime bug is fixed.
         return s;
     }
     if (m.lb.handoff) {
@@ -307,7 +313,8 @@ pub fn toSpec(m: Manifest): spec.Spec {
         s.netns = true;
         s.basePort = if (m.network.portBase > 0) m.network.portBase else 8080;
         s.portFlag = if (!string.eql(m.network.portFlag, "")) m.network.portFlag else "--port";
-        s.probePort = s.basePort;
+        // probePort left 0: see the note on the public path above (data-plane health checks + supervisor
+        // liveness cover readiness; the orchd HTTP probe is redundant and hits a reactor bug for now).
     }
     // handoff (mac/win) and loopback leave basePort 0 — the app is reached via the gateway, not a port.
     return s;

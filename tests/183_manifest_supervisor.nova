@@ -35,7 +35,10 @@ fn test_toSpec_maps_manifest_fields(): void {
     // public exposure => port config flows through
     assert.equalInt(s.basePort, 8080);
     assert.equalStr(s.portFlag, "--port");
-    assert.equalInt(s.probePort, 8080);
+    // probePort is deliberately 0: orchd does NOT run its own HTTP readiness probe (redundant with the
+    // data-plane service's health checks, and it triggered a lang reactor crash). Readiness is the service's
+    // job; orchd owns process-liveness supervision.
+    assert.equalInt(s.probePort, 0);
 }
 
 @test
