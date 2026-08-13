@@ -31,16 +31,16 @@ to the plan item that closes the finding.
 | F-1 | Live-path CAS not atomic -> split-brain election | CRITICAL | C-T2-1 | FIXED (casBy now issues a single guarded `UPDATE ... WHERE k=? AND revision=?`, an atomic read-modify-write under NovaDB's per-table exclusive lock, once B-3 gave the engine a real guarded UPDATE; the read-then-unguarded-write TOCTOU is gone) |
 | F-2 | Quorum gate is dead code (never called by the lease) | HIGH | C-T2-2 | FIXED (AsyncLeaderLease.tryAcquire now calls hasQuorum(): with members configured, only a registered member with a store-visible majority may take the lease; no members = single-orchd mode, unchanged) |
 | F-3 | HA is a single-store lease, not consensus (framing/doc) | HIGH | doc + single-orchd deployment | open |
-| F-4 | Service VIP bind silently non-functional (binds INADDR_ANY) | HIGH | POLISH (deferrable at medium scale) | open |
+| F-4 | Service VIP bind silently non-functional (binds INADDR_ANY) | HIGH | POLISH (deferrable at medium scale) | FIXED (proxyAcceptLoop now resolves the Service VIP host via bindAddrFor(): a dotted-quad binds that address, empty binds INADDR_ANY, a bad host is reported and falls back loudly) |
 | F-5 | Config validation only partly loud-fail (`?? default`) | MEDIUM | POLISH | open |
-| F-6 | Graceful shutdown has no real grace window | HIGH | C-T1-3 | open |
-| F-7 | Manifest change bounces the whole workload (no rolling update) | HIGH | C-T1-1 | open |
+| F-6 | Graceful shutdown has no real grace window | HIGH | C-T1-3 | FIXED (C-T1-3 graceful drain: SIGTERM + wall-clock deadline poll + SIGKILL on overrun) |
+| F-7 | Manifest change bounces the whole workload (no rolling update) | HIGH | C-T1-1 | FIXED (C-T1-1 rolling update: one replica swapped per grace window, N-1 keep serving) |
 | F-8 | Probe-driven heal is stop-the-world, no backoff | MEDIUM | POLISH | open |
 | F-9 | Autoscaler regulates aggregate cgroup CPU vs per-workload setpoint | MEDIUM | POLISH | open |
 | F-10 | Blocking reaps inside the reactor-0 control coroutine | MEDIUM | C-T1-3 | open |
 | F-11 | Data-plane 64 KB ceiling, idle-fd leak, unbounded concurrency, no shutdown | MEDIUM | C-T1-5 | open |
-| F-12 | Non-atomic discovery file write (torn reads) | MEDIUM | C-T1-4 | open |
-| F-13 | Silent isolation downgrade with no observability | MEDIUM | C-Iso | open |
+| F-12 | Non-atomic discovery file write (torn reads) | MEDIUM | C-T1-4 | FIXED (C-T1-4 atomicWriteText: temp file + atomic rename in publishDiscovery + ServiceRegistry.flush) |
+| F-13 | Silent isolation downgrade with no observability | MEDIUM | C-Iso | FIXED (C-Iso: reportIsolationOnce logs 'Limits are NOT applied' once when isolation requested but unavailable; slice check 6 gates it) |
 | F-14 | httpProbe fixed-offset parse; backup no escaping; metrics/HTML no escaping; netns addr bound | LOW | POLISH | open |
 
 ## Part 1: correctness defects (fix first)

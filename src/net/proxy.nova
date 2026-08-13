@@ -706,6 +706,36 @@ async fn healthCheckLoop(pool: Pool): int {
     return 0;
 }
 
+// F-4: parse a dotted-quad IPv4 host into the value makeSockaddrIn wants for sin_addr. makeSockaddrIn
+// writes the address with a little-endian write_i32 into the network-order sin_addr, so the first octet
+// must land in the low byte: value = a | (b<<8) | (c<<16) | (d<<24). Returns -1 for anything that is not
+// a valid dotted quad (caller then falls back to INADDR_ANY, loudly).
+fn parseIpv4Addr(host: string): long {
+    let parts = string.split(host, ".");
+    if (parts.size() != 4) { return -1 as long; }
+    let acc = 0 as long;
+    let i = 0;
+    while (i < 4) {
+        let o = string.parseInt(parts.get(i) ?? "") ?? -1;
+        if (o < 0 || o > 255) { return -1 as long; }
+        acc = acc | ((o as long) << (8 * i));
+        i = i + 1;
+    }
+    return acc;
+}
+
+// Resolve a bind host to the makeSockaddrIn address argument. Empty host = INADDR_ANY (0). A specified
+// but unparseable VIP is reported (never silently bound to all interfaces) and then falls back to 0.
+fn bindAddrFor(host: string): long {
+    if (string.eql(host, "")) { return 0 as long; }
+    let a = parseIpv4Addr(host);
+    if (a < 0) {
+        console.log("proxy: VIP host '" + host + "' is not a valid IPv4 dotted quad; binding all interfaces (INADDR_ANY)");
+        return 0 as long;
+    }
+    return a;
+}
+
 // One reactor's front-end accept loop: bind a SO_REUSEPORT acceptor on THIS reactor, then accept +
 // spawn a handler per client. Handlers stay on the accepting reactor, so their backend connections are
 // acquired/pooled/reused on the same reactor's per-reactor idle list (safe, lock-free).
@@ -720,7 +750,9 @@ async fn proxyAcceptLoop(pool: Pool, host: string, port: int, tmo: int): int {
     sys.setsockopt(lfd, sys.SOL_SOCKET(), 4, one, 4);   // SO_REUSEADDR
     sys.setReusePort(lfd);
     bytes.free(one);
-    let sa = sys.makeSockaddrIn(port, 0);
+    // F-4: honour the Service VIP host (e.g. "127.0.0.2") instead of always binding INADDR_ANY. Empty
+    // host keeps the all-interfaces behaviour; a bad host is reported and falls back to any.
+    let sa = sys.makeSockaddrIn(port, bindAddrFor(host));
     if (sys.bind(lfd, sa, 16) != 0) {
         bytes.free(sa);
         console.log("proxy: failed to bind front port (in use?)");
