@@ -184,15 +184,14 @@ pub struct SqlConfigStore {
             let _1 = await self.conn.exec("INSERT INTO config (k, v, revision, updated_by, updated_at) VALUES ($1, $2, $3, $4, $5)", ins);
             return rev as long;
         }
-        // Guarded update: read the current revision and only bump + write if it STILL matches. Checking
-        // before bumping (rather than a single UPDATE ... WHERE revision = ?) means a FAILED CAS consumes
-        // no revision, so this matches the in-memory ConfigStore's numbering exactly (single writer, so
-        // no TOCTOU between the read and the write).
-        let chk = list.List<DbValue>();
-        chk.push(dbText(key));
-        let rs = await self.conn.query("SELECT revision FROM config WHERE k = $1", chk);
-        if (rs.rowCount() == 0) { return -1 as long; }                     // key gone
-        if (rs.row(0).getInt(0) != (expectedRevision as int)) { return -1 as long; }  // stale -> retry
+        // C-T2-1 (F-1 split-brain fix): a SINGLE atomic guarded UPDATE, not a read-then-write. The
+        // revision guard lives IN the WHERE clause, so the check and the write happen together under
+        // NovaDB's per-table exclusive UPDATE lock (an atomic read-modify-write, now that the engine
+        // evaluates `WHERE k = ? AND revision = ?` correctly). Two orchd racing a CAS on the same
+        // expectedRevision can no longer both win: the first flips the key's revision to rev2, so the
+        // second matches zero rows and loses. rows_affected is the CAS verdict (1 = won, 0 = lost).
+        // (The old code SELECTed the revision then UPDATEd unguarded, a TOCTOU that let both writers pass
+        // the check and clobber each other, which is exactly the split-brain election vector.)
         let rev2 = await self.nextRevision();
         let up = list.List<DbValue>();
         up.push(dbText(value));
@@ -200,7 +199,9 @@ pub struct SqlConfigStore {
         up.push(dbText(by));
         up.push(dbInt(at));
         up.push(dbText(key));
-        let _1 = await self.conn.exec("UPDATE config SET v = $1, revision = $2, updated_by = $3, updated_at = $4 WHERE k = $5", up);
+        up.push(dbInt(expectedRevision as int));
+        let ex = await self.conn.exec("UPDATE config SET v = $1, revision = $2, updated_by = $3, updated_at = $4 WHERE k = $5 AND revision = $6", up);
+        if (ex.rows_affected == 0) { return -1 as long; }   // key gone or revision moved: CAS lost
         return rev2 as long;
     }
 

@@ -28,7 +28,7 @@ to the plan item that closes the finding.
 
 | ID | Finding | Severity | Fix | Status |
 |----|---------|----------|-----|--------|
-| F-1 | Live-path CAS not atomic -> split-brain election | CRITICAL | C-T2-1 (deferred: single orchd for the slice) | open |
+| F-1 | Live-path CAS not atomic -> split-brain election | CRITICAL | C-T2-1 | FIXED (casBy now issues a single guarded `UPDATE ... WHERE k=? AND revision=?`, an atomic read-modify-write under NovaDB's per-table exclusive lock, once B-3 gave the engine a real guarded UPDATE; the read-then-unguarded-write TOCTOU is gone) |
 | F-2 | Quorum gate is dead code (never called by the lease) | HIGH | C-T2-2 | open |
 | F-3 | HA is a single-store lease, not consensus (framing/doc) | HIGH | doc + single-orchd deployment | open |
 | F-4 | Service VIP bind silently non-functional (binds INADDR_ANY) | HIGH | POLISH (deferrable at medium scale) | open |
