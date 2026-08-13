@@ -22,6 +22,17 @@ import store.config;
 // How many consecutive failed HTTP probes drain a workload's patience before it is restarted.
 const PROBE_FAIL_LIMIT = 3;
 
+// T1-4 torn-free write: write to a sibling temp file, then rename over the target. rename(2) is atomic
+// within a filesystem (temp and target share the directory, hence the filesystem), so a concurrent reader
+// on the data plane sees either the old discovery file or the complete new one, never a half-written file
+// that would momentarily drop backends. One writer per file (the single orchd reconcile loop), so a fixed
+// ".tmp" suffix cannot collide.
+fn atomicWriteText(path: string, content: string): void {
+    let tmp = path + ".tmp";
+    file.File.writeText(tmp, content);
+    let _ = dir.Dir.rename(tmp, path);
+}
+
 // Whether a store value is a raw JSON Spec (first non-space char is '{') rather than a YAML manifest.
 // Used by reconcileFromEntries to sniff the workload-descriptor form (a store value has no filename to
 // key off, unlike scan()'s ".json"/".yaml" split).
@@ -126,12 +137,12 @@ pub struct Nativelet {
         return out;
     }
 
-    // Write the discovery file atomically-ish (single writeText) when publication is enabled. Called each
-    // reconcile tick by run(); a workload added/removed/rescaled shows up on the next tick, and service's
-    // active health checks prune any advertised endpoint that is not actually serving yet.
+    // Write the discovery file TORN-FREE (T1-4) when publication is enabled. Called each reconcile tick by
+    // run(); a workload added/removed/rescaled shows up on the next tick, and service's active health
+    // checks prune any advertised endpoint that is not actually serving yet.
     pub fn publishDiscovery(self: Nativelet): void {
         if (string.eql(self.discoveryFile, "")) { return; }
-        file.File.writeText(self.discoveryFile, self.renderDiscovery());
+        atomicWriteText(self.discoveryFile, self.renderDiscovery());
     }
 
     pub fn findJobIdx(self: Nativelet, name: string): int {   // index or -1

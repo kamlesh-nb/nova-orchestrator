@@ -17,6 +17,7 @@
 import net.proxy;
 import net.aio;
 import io.file;
+import io.dir;
 import list;
 import string;
 
@@ -99,7 +100,11 @@ pub struct ServiceRegistry {
             text = text + s.name + "=" + s.endpoint() + "\n";
             i = i + 1;
         }
-        file.File.writeText(self.registryFile, text);
+        // T1-4 torn-free write: temp file + atomic rename, so a discovery reader never sees a half-written
+        // registry (which would momentarily drop backends).
+        let tmp = self.registryFile + ".tmp";
+        file.File.writeText(tmp, text);
+        let _ = dir.Dir.rename(tmp, self.registryFile);
     }
 }
 
