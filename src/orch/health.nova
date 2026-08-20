@@ -96,6 +96,22 @@ pub fn standaloneReport(n: nativelet.Nativelet): HealthReport {
 
 // Render Prometheus exposition text: node gauges + one line per workload (statuses = Nativelet.status(),
 // already in job order). A caller serves this verbatim at /metrics.
+// Escape a Prometheus label value (exposition format): `\`->`\\`, `"`->`\"`, LF->`\n`. Without this a
+// workload name containing a quote or newline would break the `{workload="..."}` label and corrupt the scrape.
+fn promLabel(s: string): string {
+    let out = "";
+    let i = 0;
+    while (i < string.len(s)) {
+        let c = s[i];
+        if (c == 92) { out = out + "\\\\"; }
+        else if (c == 34) { out = out + "\\\""; }
+        else if (c == 10) { out = out + "\\n"; }
+        else { out = out + string.charAt(s, i); }
+        i = i + 1;
+    }
+    return out;
+}
+
 pub fn renderMetrics(r: HealthReport, statuses: list.List<nativelet.WorkloadStatus>): string {
     let out = "";
     out = out + "orch_up " + boolMetric(r.healthy()) + "\n";
@@ -110,9 +126,9 @@ pub fn renderMetrics(r: HealthReport, statuses: list.List<nativelet.WorkloadStat
     let i = 0;
     while (i < statuses.size()) {
         let s = statuses.get(i) ?? nativelet.WorkloadStatus("", 0, 0, 0);
-        out = out + "orch_workload_running{workload=\"" + s.name + "\"} " + s.running + "\n";
-        out = out + "orch_workload_desired{workload=\"" + s.name + "\"} " + s.desired + "\n";
-        out = out + "orch_workload_restarts{workload=\"" + s.name + "\"} " + s.restarts + "\n";
+        out = out + "orch_workload_running{workload=\"" + promLabel(s.name) + "\"} " + s.running + "\n";
+        out = out + "orch_workload_desired{workload=\"" + promLabel(s.name) + "\"} " + s.desired + "\n";
+        out = out + "orch_workload_restarts{workload=\"" + promLabel(s.name) + "\"} " + s.restarts + "\n";
         i = i + 1;
     }
     return out;

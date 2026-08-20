@@ -8,6 +8,8 @@ import orch.lease;
 import orch.rollout;
 import orch.membership;
 import orch.backup;
+import orch.health;
+import orch.nativelet;
 import list;
 import string;
 
@@ -120,4 +122,33 @@ fn test_backup_prefix_scopes_the_dump(): void {
     let only = backup.dump(src, "workloads/");
     assert.isTrue(string.contains(only, "workloads/web"));
     assert.isFalse(string.contains(only, "leases/leader"));
+}
+
+// Output escaping: a config value containing a TAB or NEWLINE must round-trip through the line-oriented
+// backup dump/restore (previously it corrupted the format), and a workload name with a quote must be escaped
+// in the Prometheus /metrics label (previously it broke the {workload="..."} exposition).
+@test
+fn test_backup_round_trips_tab_and_newline_values(): void {
+    let src = config.ConfigStore();
+    let nasty = "line1\nline2\tcol\\end";   // embedded newline, tab, backslash
+    let _1 = src.put("k/weird", nasty);
+    let _2 = src.put("k/plain", "ok");
+    let data = backup.dump(src, "");
+    let dst = config.ConfigStore();
+    let applied = backup.restore(dst, data);
+    assert.equalInt(applied, 2);
+    let got = dst.get("k/weird") ?? config.ConfigEntry("", "", 0);
+    assert.equalStr(got.value, nasty);     // exact round-trip, structure intact
+    let plain = dst.get("k/plain") ?? config.ConfigEntry("", "", 0);
+    assert.equalStr(plain.value, "ok");
+}
+
+@test
+fn test_metrics_label_escapes_quotes(): void {
+    let r = health.HealthReport("standalone", 0, "", true, 1, 1, 0, 0, 0);
+    let statuses = list.List<nativelet.WorkloadStatus>();
+    statuses.push(nativelet.WorkloadStatus("we\"ird", 1, 1, 0));
+    let out = health.renderMetrics(r, statuses);
+    // The quote in the name is escaped (\"), so the label is not broken.
+    assert.isTrue(string.contains(out, "workload=\"we\\\"ird\""));
 }
