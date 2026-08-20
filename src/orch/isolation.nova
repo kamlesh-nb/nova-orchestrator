@@ -41,20 +41,25 @@ pub fn applyLimits(sp: spec.Spec, pid: long): bool {
     let d = cgroupDir(sp.name);
     let _ = dir.Dir.create(d, 493);              // mkdir 0755; ignore "already exists"
 
+    // Check every write: on an unprivileged Linux host the cgroup writes are REJECTED, which previously
+    // passed silently and returned true (a false "limits applied"). Now any failed limit write, or a failed
+    // process attach, makes applyLimits return false so the supervisor reports the downgrade.
+    let ok = true;
     if (sp.cpuMilli > 0) {
         let period = 100000;
         let quota = (sp.cpuMilli * period) / 1000;
-        file.File.writeText(d + "/cpu.max", "" + quota + " " + period + "\n");
+        if (!file.File.writeTextOk(d + "/cpu.max", "" + quota + " " + period + "\n")) { ok = false; }
     }
     if (sp.memMaxBytes > 0) {
-        file.File.writeText(d + "/memory.max", "" + sp.memMaxBytes + "\n");
+        if (!file.File.writeTextOk(d + "/memory.max", "" + sp.memMaxBytes + "\n")) { ok = false; }
     }
     if (sp.pidsMax > 0) {
-        file.File.writeText(d + "/pids.max", "" + sp.pidsMax + "\n");
+        if (!file.File.writeTextOk(d + "/pids.max", "" + sp.pidsMax + "\n")) { ok = false; }
     }
-    // Attach the process LAST (writing cgroup.procs moves it into the constrained group).
-    file.File.writeText(d + "/cgroup.procs", "" + pid + "\n");
-    return true;
+    // Attach the process LAST (writing cgroup.procs moves it into the constrained group). A failed attach
+    // means the process is NOT constrained -- the most important write to report.
+    if (!file.File.writeTextOk(d + "/cgroup.procs", "" + pid + "\n")) { ok = false; }
+    return ok;
 }
 
 // Cumulative CPU time (microseconds) a workload's cgroup has consumed — the "usage_usec" line of
