@@ -20,6 +20,9 @@ struct FakeConn impl Connection {
     pub bys: List<string>,      // updated_by column
     pub ats: List<int>,         // updated_at column (unix seconds; INT)
     pub metaRev: int,
+    pub raceMode: bool,         // when true, the exists()-style revision SELECT reports ABSENT even if the
+                                // key is present -- simulates the TOCTOU window where a racer inserted after
+                                // this node's exists() ran, so only the PK conflict on INSERT can arbitrate.
 
     init() {
         self.keys = List<string>();
@@ -28,6 +31,7 @@ struct FakeConn impl Connection {
         self.bys = List<string>();
         self.ats = List<int>();
         self.metaRev = 0;
+        self.raceMode = false;
     }
 
     fn find(self: FakeConn, key: string): int {
@@ -56,8 +60,12 @@ struct FakeConn impl Connection {
             return ExecResult(1, "OK");
         }
         if (string.contains(sql, "INSERT INTO config")) {
-            // INSERT (k, v, revision, updated_by, updated_at) VALUES ($1..$5)
-            self.keys.push(params.at(0).asText());
+            // INSERT (k, v, revision, updated_by, updated_at) VALUES ($1..$5). `config.k` is the PRIMARY KEY,
+            // so a second creator of the same key is rejected with a duplicate-key conflict (0 rows) -- this
+            // is what makes the create-only CAS a true single-winner primitive.
+            let k = params.at(0).asText();
+            if (self.find(k) >= 0) { return ExecResult(0, "duplicate key (k is PRIMARY KEY)"); }
+            self.keys.push(k);
             self.vals.push(params.at(1).asText());
             self.revs.push(params.at(2).asInt());
             self.bys.push(params.at(3).asText());
@@ -65,13 +73,19 @@ struct FakeConn impl Connection {
             return ExecResult(1, "OK");
         }
         if (string.contains(sql, "UPDATE config SET")) {
-            // SET v = $1, revision = $2, updated_by = $3, updated_at = $4 WHERE k = $5
+            // SET v = $1, revision = $2, updated_by = $3, updated_at = $4 WHERE k = $5 [AND revision = $6]
             let v = params.at(0).asText();
             let rev = params.at(1).asInt();
             let by = params.at(2).asText();
             let ts = params.at(3).asInt();
             let at = self.find(params.at(4).asText());
             if (at < 0) { return ExecResult(0, "OK"); }
+            // CAS revision guard: the guarded UPDATE only matches when the row's current revision equals the
+            // expected one ($6). Real NovaDB evaluates this in the WHERE; the fake must too, or a stale CAS
+            // silently "succeeds" (the split-brain vector). A plain put() has no guard and always matches.
+            if (string.contains(sql, "AND revision = $6")) {
+                if (self.revs.at(at) != params.at(5).asInt()) { return ExecResult(0, "OK"); }   // revision moved: CAS lost
+            }
             self.vals.set(at, v);
             self.revs.set(at, rev);
             self.bys.set(at, by);
@@ -91,6 +105,9 @@ struct FakeConn impl Connection {
             return rs;
         }
         if (string.contains(sql, "WHERE k = $1")) {
+            // raceMode: blind the exists()-style revision probe (NOT the full get) so casBy's create path
+            // reaches the INSERT and must be arbitrated by the PRIMARY KEY conflict.
+            if (self.raceMode && !string.contains(sql, "SELECT v, revision")) { return rs; }
             let at = self.find(params.at(0).asText());
             if (at < 0) { return rs; }            // 0 rows
             let r = Row();
@@ -124,6 +141,9 @@ struct FakeConn impl Connection {
     pub fn close(self: FakeConn): void { }
     pub fn setTimeout(self: FakeConn, ms: int): int { return 0; }
     pub async fn prepare(self: FakeConn, sql: string): int { return 0; }
+    pub async fn queryWire(self: FakeConn, sql: string, params: List<DbValue>): db.WireRows {
+        return db.wireRowsFromResultSet(await self.query(sql, params));
+    }
     pub async fn queryPrepared(self: FakeConn, stmt: int, params: List<DbValue>): ResultSet { return ResultSet(); }
     pub async fn execPrepared(self: FakeConn, stmt: int, params: List<DbValue>): ExecResult { return ExecResult(0, ""); }
     pub async fn begin(self: FakeConn): ExecResult { return ExecResult(0, ""); }
@@ -270,4 +290,40 @@ fn test_sql_watch_since(): void {
     assert.isTrue((recent.at(1)).revision == 3);
 
     assert.equalInt(s.watch("leases/", 0).size(), 0);
+}
+
+// Leader-lease create-race: create-only CAS (expectedRevision 0) must yield EXACTLY ONE winner when two
+// nodes race a FREE lease. The common sequential case is caught by exists(); the CONCURRENT case is caught
+// by the PRIMARY KEY conflict on INSERT (the authoritative arbiter the old code ignored).
+@test
+fn test_create_only_cas_single_winner_sequential(): void {
+    let s = sqlconfig.SqlConfigStore(FakeConn());
+    s.ensureSchema();
+    let r1 = s.casBy("leases/leader", "node-A", 0, "A");   // first creator wins epoch 1
+    assert.isTrue(r1 > 0);
+    let r2 = s.casBy("leases/leader", "node-B", 0, "B");   // key present -> CAS lost
+    assert.isTrue(r2 == -1);
+    let e = s.get("leases/leader") ?? config.ConfigEntry("", "", 0);
+    assert.equalStr(e.value, "node-A");
+}
+
+@test
+fn test_create_race_insert_is_authoritative(): void {
+    // A racer already created the lease. Blind this node's exists() (raceMode) to simulate the TOCTOU window,
+    // so the create path reaches the INSERT. The OLD code discarded the INSERT result and would have "won"
+    // epoch 1 too (split-brain); the fix checks rows_affected, so the duplicate-key conflict makes it LOSE.
+    let conn = FakeConn();
+    let winner = sqlconfig.SqlConfigStore(conn);
+    winner.ensureSchema();
+    let rw = winner.casBy("leases/leader", "node-A", 0, "A");
+    assert.isTrue(rw > 0);                 // the racer that got there first holds the lease
+
+    conn.raceMode = true;                  // now exists() is blind to the existing key for this node
+    let loser = sqlconfig.SqlConfigStore(conn);
+    let rl = loser.casBy("leases/leader", "node-B", 0, "B");
+    assert.isTrue(rl == -1);               // INSERT rejected by the PK -> CAS lost (single winner)
+
+    conn.raceMode = false;
+    let e = loser.get("leases/leader") ?? config.ConfigEntry("", "", 0);
+    assert.equalStr(e.value, "node-A");    // the loser did not overwrite the winner
 }

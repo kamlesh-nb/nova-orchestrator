@@ -50,14 +50,24 @@ pub struct SqlConfigStore {
     // than `SET rev = rev + 1`: BTreeDB's UPDATE does not evaluate a column-referencing expression (it
     // returns an empty tag / 0 rows). Single writer, so the read then write is race-free.
     async fn nextRevision(self: SqlConfigStore): int {
+        let next = (await self.peekRevision()) + 1;
+        let _c = await self.commitRevision(next);
+        return next;
+    }
+
+    // The current global revision WITHOUT advancing it (read-only). Split out from nextRevision so a CAS can
+    // reserve the next value, attempt its guarded write, and only COMMIT the bump on success -- a FAILED CAS
+    // (stale revision, or a lost create race) must not churn the global revision counter.
+    async fn peekRevision(self: SqlConfigStore): int {
         let sel = list.List<DbValue>();
         let rs = await self.conn.query("SELECT rev FROM config_meta WHERE id = 0", sel);
-        let cur = if (rs.rowCount() == 0) 0 else rs.row(0).getInt(0);
-        let next = cur + 1;
+        return if (rs.rowCount() == 0) 0 else rs.row(0).getInt(0);
+    }
+    async fn commitRevision(self: SqlConfigStore, rev: int): int {
         let up = list.List<DbValue>();
-        up.push(dbInt(next));
+        up.push(dbInt(rev));
         let _1 = await self.conn.exec("UPDATE config_meta SET rev = $1 WHERE id = 0", up);
-        return next;
+        return rev;
     }
 
     // Declare this node's fencing epoch to the underlying BTreeDB (over the wire): the store then rejects
@@ -172,16 +182,24 @@ pub struct SqlConfigStore {
     pub async fn casBy(self: SqlConfigStore, key: string, value: string, expectedRevision: long, by: string): long {
         let at = datetime.now();            // unix seconds, from the real clock on this live path
         if (expectedRevision == 0) {
-            let has = await self.exists(key);
-            if (has) { return -1 as long; }         // create-only: must not already exist
-            let rev = await self.nextRevision();
+            // Create-only CAS. exists() is a fast path for the COMMON "already present" case (so a losing
+            // renew does not churn the revision counter). But it is NOT authoritative on its own: two orchd
+            // racing a FREE lease could BOTH pass exists() and both INSERT -- the old code then discarded the
+            // INSERT result, so both "won" epoch 1 (split-brain election). The PRIMARY KEY on config.k is the
+            // real atomic arbiter: we now CHECK the INSERT result and treat rows_affected == 0 (a duplicate-key
+            // conflict from a racer that slipped in between exists() and INSERT) as CAS lost. Exactly one racer
+            // inserts a row, so exactly one wins.
+            if (await self.exists(key)) { return -1 as long; }
+            let rev = (await self.peekRevision()) + 1;   // reserve, commit only if the INSERT wins
             let ins = list.List<DbValue>();
             ins.push(dbText(key));
             ins.push(dbText(value));
             ins.push(dbInt(rev));
             ins.push(dbText(by));
             ins.push(dbInt(at));
-            let _1 = await self.conn.exec("INSERT INTO config (k, v, revision, updated_by, updated_at) VALUES ($1, $2, $3, $4, $5)", ins);
+            let ex = await self.conn.exec("INSERT INTO config (k, v, revision, updated_by, updated_at) VALUES ($1, $2, $3, $4, $5)", ins);
+            if (ex.rows_affected == 0) { return -1 as long; }   // a racer created it between exists() and INSERT: CAS lost, no revision churn
+            let _c = await self.commitRevision(rev);
             return rev as long;
         }
         // C-T2-1 (F-1 split-brain fix): a SINGLE atomic guarded UPDATE, not a read-then-write. The
@@ -192,7 +210,7 @@ pub struct SqlConfigStore {
         // second matches zero rows and loses. rows_affected is the CAS verdict (1 = won, 0 = lost).
         // (The old code SELECTed the revision then UPDATEd unguarded, a TOCTOU that let both writers pass
         // the check and clobber each other, which is exactly the split-brain election vector.)
-        let rev2 = await self.nextRevision();
+        let rev2 = (await self.peekRevision()) + 1;   // reserve; commit only if the guarded UPDATE wins
         let up = list.List<DbValue>();
         up.push(dbText(value));
         up.push(dbInt(rev2));
@@ -201,7 +219,8 @@ pub struct SqlConfigStore {
         up.push(dbText(key));
         up.push(dbInt(expectedRevision as int));
         let ex = await self.conn.exec("UPDATE config SET v = $1, revision = $2, updated_by = $3, updated_at = $4 WHERE k = $5 AND revision = $6", up);
-        if (ex.rows_affected == 0) { return -1 as long; }   // key gone or revision moved: CAS lost
+        if (ex.rows_affected == 0) { return -1 as long; }   // key gone or revision moved: CAS lost, no revision churn
+        let _c = await self.commitRevision(rev2);
         return rev2 as long;
     }
 
