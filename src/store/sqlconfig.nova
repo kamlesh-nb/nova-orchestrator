@@ -190,7 +190,11 @@ pub struct SqlConfigStore {
             // conflict from a racer that slipped in between exists() and INSERT) as CAS lost. Exactly one racer
             // inserts a row, so exactly one wins.
             if (await self.exists(key)) { return -1 as long; }
-            let rev = (await self.peekRevision()) + 1;   // reserve, commit only if the INSERT wins
+            // Wrap the row INSERT + the revision-counter bump in a TRANSACTION on the seam, so they land
+            // together (a crash between them can no longer leave the config row committed with a stale
+            // revision counter). ROLLBACK if the INSERT loses the create race.
+            let _b = await self.conn.begin();
+            let rev = (await self.peekRevision()) + 1;
             let ins = list.List<DbValue>();
             ins.push(dbText(key));
             ins.push(dbText(value));
@@ -198,8 +202,12 @@ pub struct SqlConfigStore {
             ins.push(dbText(by));
             ins.push(dbInt(at));
             let ex = await self.conn.exec("INSERT INTO config (k, v, revision, updated_by, updated_at) VALUES ($1, $2, $3, $4, $5)", ins);
-            if (ex.rows_affected == 0) { return -1 as long; }   // a racer created it between exists() and INSERT: CAS lost, no revision churn
+            if (ex.rows_affected == 0) {   // a racer created it between exists() and INSERT: CAS lost
+                let _r = await self.conn.rollback();
+                return -1 as long;
+            }
             let _c = await self.commitRevision(rev);
+            let _cm = await self.conn.commit();
             return rev as long;
         }
         // C-T2-1 (F-1 split-brain fix): a SINGLE atomic guarded UPDATE, not a read-then-write. The
@@ -210,7 +218,9 @@ pub struct SqlConfigStore {
         // second matches zero rows and loses. rows_affected is the CAS verdict (1 = won, 0 = lost).
         // (The old code SELECTed the revision then UPDATEd unguarded, a TOCTOU that let both writers pass
         // the check and clobber each other, which is exactly the split-brain election vector.)
-        let rev2 = (await self.peekRevision()) + 1;   // reserve; commit only if the guarded UPDATE wins
+        // Guarded UPDATE + revision bump, in a transaction (atomic together; rollback if the CAS loses).
+        let _b = await self.conn.begin();
+        let rev2 = (await self.peekRevision()) + 1;
         let up = list.List<DbValue>();
         up.push(dbText(value));
         up.push(dbInt(rev2));
@@ -219,8 +229,12 @@ pub struct SqlConfigStore {
         up.push(dbText(key));
         up.push(dbInt(expectedRevision as int));
         let ex = await self.conn.exec("UPDATE config SET v = $1, revision = $2, updated_by = $3, updated_at = $4 WHERE k = $5 AND revision = $6", up);
-        if (ex.rows_affected == 0) { return -1 as long; }   // key gone or revision moved: CAS lost, no revision churn
+        if (ex.rows_affected == 0) {   // key gone or revision moved: CAS lost
+            let _r = await self.conn.rollback();
+            return -1 as long;
+        }
         let _c = await self.commitRevision(rev2);
+        let _cm = await self.conn.commit();
         return rev2 as long;
     }
 
