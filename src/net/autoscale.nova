@@ -91,6 +91,10 @@ pub struct Autoscaler {
     pub maxReplicas: int,
     pub current: int,              // number of replicas currently in rotation (slots 0..current-1)
     pub procs: list.List<process.Process>,  // running replica processes, one per active slot (len == current)
+    // Scaled-down processes awaiting a NON-BLOCKING reap. Scale-down sends SIGTERM and parks the Process
+    // here instead of blocking the reactor on p.wait(); reapPending() collects them with tryWait (WNOHANG)
+    // on later control ticks, so a slow-to-exit backend never stalls reactor 0.
+    pub pendingReap: list.List<process.Process>,
     // When false (tests), scaleTo only flips pool slots — it does NOT spawn/kill real processes. Live use
     // leaves it true so the controller actually starts/stops backends.
     pub manageProcesses: bool,
@@ -107,6 +111,7 @@ pub struct Autoscaler {
         self.maxReplicas = if (maxReplicas < self.minReplicas) self.minReplicas else maxReplicas;
         self.current = 0;
         self.procs = list.List<process.Process>();
+        self.pendingReap = list.List<process.Process>();
         self.manageProcesses = true;
         // Pre-register maxReplicas backend slots, all DRAINED (up=0). The LB ring/weight expansion include
         // them but healthyFrom skips any drained slot, so an idle slot is simply invisible until scaled in.
@@ -152,13 +157,33 @@ pub struct Autoscaler {
                 if (idx >= 0) {
                     let p = self.procs.get(idx) ?? process.Process.spawn("/bin/true", list.List<string>());
                     let _ = p.terminate();     // SIGTERM — graceful
-                    let _ = p.wait();          // reap (avoid a zombie); backends exit fast on SIGTERM
-                    p.close();
+                    // Do NOT p.wait() here: a blocking wait on reactor 0 stalls every other coroutine until
+                    // the child exits. Park it for a non-blocking reap (reapPending) on a later tick instead.
+                    self.pendingReap.push(p);
                     self.procs.remove(idx);
                 }
             }
             self.current = slot;
         }
+        self.reapPending();
+    }
+
+    // Non-blocking reap of SIGTERM'd, scaled-down processes. tryWait is waitpid(WNOHANG): it returns -2 while
+    // the child is still running (left parked for the next call) and the exit status once it has exited (then
+    // closed + dropped). This never blocks the reactor -- a child that is slow to drain simply stays parked a
+    // few ticks longer. Returns the number still awaiting exit.
+    pub fn reapPending(self: Autoscaler): int {
+        let i = 0;
+        while (i < self.pendingReap.size()) {
+            let p = self.pendingReap.get(i) ?? process.Process.spawn("/bin/true", list.List<string>());
+            if (p.tryWait() == -2) {
+                i = i + 1;                 // still running -- leave parked, check again next tick
+            } else {
+                p.close();                 // exited -- reaped by tryWait, release the handle
+                self.pendingReap.remove(i);
+            }
+        }
+        return self.pendingReap.size();
     }
 
     // Spawn the minimum replica set. Call once before the control loop starts serving.
@@ -174,6 +199,7 @@ pub struct Autoscaler {
 
     // Sample the live metric (total in-flight requests across the pool) and actuate one scaling step.
     pub fn tick(self: Autoscaler, dt: double): void {
+        let _ = self.reapPending();        // collect any still-parked scaled-down children (non-blocking)
         let load = self.pool.totalActive() as double;
         self.scaleTo(self.decide(load, dt));
     }

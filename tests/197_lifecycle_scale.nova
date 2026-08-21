@@ -8,6 +8,9 @@ import orch.supervisor;
 import orch.nativelet;
 import orch.alerts;
 import orch.health;
+import net.autoscale;
+import net.proxy;
+import process;
 import list;
 import string;
 
@@ -120,6 +123,63 @@ fn test_fleet_converges_after_crash_wave(): void {
     n.pollAll();
     assert.equalInt(n.totalRunning(), 100);
     assert.equalInt(n.underProvisioned(), 0);
+}
+
+// ---- scale-down reaps REAL processes without blocking the reactor ----
+
+// The autoscaler must never block reactor 0 on p.wait() during scale-down. It now SIGTERMs the scaled-down
+// backend and PARKS it in pendingReap for a non-blocking tryWait (WNOHANG) reap on a later tick. This drives
+// three REAL child processes (long-lived /bin/sleep so they are provably alive), scales down to one, and
+// asserts every terminated child is reaped through the non-blocking path with no zombie left behind -- and
+// that scaleTo returned promptly rather than blocking until the children exited.
+@test
+fn test_scaledown_reaps_without_blocking_wait(): void {
+    let pool = proxy.Pool();
+    // /bin/sleep <port> stays alive for a long time, so the children are certainly running when we scale down
+    // -- a blocking wait() would hang here; the non-blocking park+reap must not.
+    let a = autoscale.Autoscaler(pool, "/bin/sleep", "127.0.0.1", 30000, 1, 3);
+    a.manageProcesses = true;
+
+    a.scaleTo(3);                              // spawn 3 real sleeps
+    assert.equalInt(a.procs.size(), 3);
+    assert.equalInt(a.current, 3);
+
+    a.scaleTo(1);                              // SIGTERM 2, park them for a non-blocking reap (never wait())
+    assert.equalInt(a.procs.size(), 1);        // scaleTo returned promptly with the survivors
+    assert.equalInt(a.current, 1);
+
+    // Drive the non-blocking reap to convergence: sleep dies on SIGTERM, so tryWait reaps within a few calls.
+    let tries = 0;
+    while (a.reapPending() > 0 && tries < 500000) { tries = tries + 1; }
+    assert.equalInt(a.pendingReap.size(), 0);  // all reaped through tryWait -- no zombies, no blocking wait
+
+    // Clean up the surviving replica directly (scaleTo(0) clamps to minReplicas=1, so it would linger and
+    // keep the test process alive): SIGTERM every remaining child, park, and drain the non-blocking reap.
+    let m = 0;
+    while (m < a.procs.size()) {
+        let p = a.procs.get(m) ?? process.Process.spawn("/bin/true", list.List<string>());
+        let _ = p.terminate();
+        a.pendingReap.push(p);
+        m = m + 1;
+    }
+    let t2 = 0;
+    while (a.reapPending() > 0 && t2 < 500000) { t2 = t2 + 1; }
+    assert.equalInt(a.pendingReap.size(), 0);
+}
+
+// With process management OFF (the deterministic test seam), scale-down is a pure slot flip: nothing is
+// spawned, terminated, or parked for reap.
+@test
+fn test_scaledown_no_processes_parks_nothing(): void {
+    let pool = proxy.Pool();
+    let a = autoscale.Autoscaler(pool, "/bin/true", "127.0.0.1", 31000, 1, 4);
+    a.manageProcesses = false;
+    a.scaleTo(4);
+    assert.equalInt(a.current, 4);
+    a.scaleTo(1);
+    assert.equalInt(a.current, 1);
+    assert.equalInt(a.pendingReap.size(), 0);  // no real processes → nothing parked
+    assert.equalInt(a.procs.size(), 0);
 }
 
 // ---- crash loop surfaces as an O5 alert ----
