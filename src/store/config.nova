@@ -52,7 +52,12 @@ pub struct ConfigEvent {
     }
 }
 
-pub struct ConfigStore {
+// ConfigStore is a CLASS (reference type): it is a SHARED, mutable store -- multiple LeaderLease / config
+// clients hold the SAME store and observe each other's writes (the "one shared store, two nodes" contention
+// model). A value struct would (correctly, under value semantics) be DEEP-COPIED when stored into a field or
+// passed by value, so each holder would get an independent copy and the sharing contract would break. Model
+// it as reference data.
+pub class ConfigStore {
     entries: list.List<ConfigEntry>,
     rev: long,   // global monotonic revision; 0 = empty store, first write yields revision 1
 
