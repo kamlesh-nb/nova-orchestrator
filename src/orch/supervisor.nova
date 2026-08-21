@@ -23,7 +23,14 @@ import env;
 // per-workload override when a rolling-update controller (T1-1) needs it.
 const TERMINATION_GRACE_MS: long = 3000;
 
-pub struct Supervisor {
+// Supervisor is a CLASS (reference type), not a value struct: it is a long-lived, identity-bearing entity
+// that is mutated IN PLACE (start/poll/rollOne/stopAll all push/remove on self.procs and expect the change
+// to persist), and it is STORED BY VALUE inside the `Job` class. A value struct holding an owned container
+// (procs/ports/simReplicas) that is passed by value into a class constructor was copied WITHOUT deep-retaining
+// those container fields, so the constructor argument's destructor freed `procs` out from under the stored
+// copy -- a later `procs.size()` (e.g. reconcile's stopAll on a removed workload) then read a dangling list
+// and segfaulted. Reference semantics are both the correct model here and the fix.
+pub class Supervisor {
     pub spec: spec.Spec,
     pub procs: list.List<process.Process>,  // live replica processes
     // Port assigned to each live replica (parallel to procs; -1 = none). When spec.basePort > 0 and
