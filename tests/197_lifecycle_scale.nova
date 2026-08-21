@@ -182,6 +182,44 @@ fn test_scaledown_no_processes_parks_nothing(): void {
     assert.equalInt(a.procs.size(), 0);
 }
 
+// ---- reconcile drives a REAL process lifecycle (not simulated) ----
+
+// With manageProcesses=true, reconcile actually SPAWNS and STOPS real OS processes: a manifest with replicas=2
+// starts two real children (verified by live PIDs / isRunning), and reconciling the workload away SIGTERM+reaps
+// them. This exercises the real spawn/stop path end-to-end, distinct from the simulated virtual-replica seam.
+@test
+fn test_reconcile_drives_real_process_lifecycle(): void {
+    let n = nativelet.Nativelet("/tmp/unused");
+    n.manageProcesses = true;                 // REAL processes, not the simulated seam
+    n.servicePath = "";                       // no companion-service expansion
+
+    let sp = spec.Spec("sleeper", "/bin/sleep");
+    sp.replicas = 2;
+    sp.restartPolicy = "always";
+    sp.args = list.List<string>();
+    sp.args.push("3600");                     // long-lived so the children are provably alive
+
+    let d = list.List<spec.Spec>();
+    d.push(sp);
+    n.reconcileWith(d);                       // -> newJob -> Supervisor.start -> spawn 2 real /bin/sleep
+
+    assert.equalInt(n.jobs.size(), 1);
+    let job = n.jobs.get(0) ?? nativelet.Job("", supervisor.Supervisor(spec.Spec("", "")), spec.Spec("", ""));
+    assert.equalInt(job.sup.procs.size(), 2);              // two REAL child processes
+    let p0 = job.sup.procs.get(0) ?? process.Process.spawn("/bin/true", list.List<string>());
+    let p1 = job.sup.procs.get(1) ?? process.Process.spawn("/bin/true", list.List<string>());
+    assert.isTrue(p0.pid() > (0 as long));                 // a live OS pid
+    assert.isTrue(p1.pid() > (0 as long));
+    assert.isTrue(p0.isRunning());                         // actually running
+    assert.isTrue(p1.isRunning());
+
+    // Reconcile the workload away -> stopAll SIGTERM+reaps every real child (stopProc waits), job removed.
+    n.reconcileWith(list.List<spec.Spec>());
+    assert.equalInt(n.jobs.size(), 0);
+    assert.isTrue(!p0.isRunning());                        // the real processes are gone
+    assert.isTrue(!p1.isRunning());
+}
+
 // ---- crash loop surfaces as an O5 alert ----
 
 @test
