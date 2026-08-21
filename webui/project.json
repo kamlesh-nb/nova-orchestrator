@@ -1,0 +1,10 @@
+{
+  "name": "orchweb",
+  "version": "0.1.0",
+  "type": "web",
+  "dependencies": [
+    "https://github.com/kamlesh-nb/nova-datastar",
+    "https://github.com/kamlesh-nb/nova-novadb",
+    "https://github.com/kamlesh-nb/nova-orchestrator"
+  ]
+}

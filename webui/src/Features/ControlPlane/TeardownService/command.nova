@@ -1,0 +1,7 @@
+// POST /api/services/{name}/teardown — remove a service's desired state (name from the route).
+import web.mediator;
+
+@serializable pub struct TeardownService impl Message {
+    pub name: string,
+    init() { self.name = ""; }
+}

@@ -1,0 +1,71 @@
+// orchweb -- the web control plane of the orchestrator stack, as a standard Nova web app (`nova init web`
+// layout: static wwwroot/index.html shell + vertical-slice Features + a composition root). It is the
+// writable, browser-facing operator surface: a Tailwind + Datastar dashboard whose sidebar is a collapsible
+// tree of nodes -> services -> replica slots. Clicking a service loads its complete manifest as an editable
+// form; clicking a node loads its info + a deploy screen. Every deploy / teardown writes a manifest to the
+// SAME NovaDB config store orchd reconciles from, so the fleet actually changes.
+//
+// The shell (wwwroot/index.html) is static and served via useStatic; each slice's handler returns a Datastar
+// SSE fragment that the shell morphs into #tree / #detail / #toast. Handlers are discovered by their
+// RequestHandler impls; importing each makes it discoverable, and its ControlPlane dependency is injected.
+//
+//   orchweb   # NOVA_ORCHWEB_DSN (default novadb://admin@127.0.0.1:3009?db=nova),
+//             # NOVA_ORCHWEB_NODE (default node-1), NOVA_PORT (default 8130)
+import web.app;
+import web.di;
+import web.request;
+import web.response;
+import web.routing;
+import web.mediator;
+import string;
+import env;
+import Features.ControlPlane.Shared.store;
+import Features.ControlPlane.GetTree.query;
+import Features.ControlPlane.GetTree.handler;
+import Features.ControlPlane.GetService.query;
+import Features.ControlPlane.GetService.handler;
+import Features.ControlPlane.GetNode.query;
+import Features.ControlPlane.GetNode.handler;
+import Features.ControlPlane.NewServiceForm.query;
+import Features.ControlPlane.NewServiceForm.handler;
+import Features.ControlPlane.DeployService.command;
+import Features.ControlPlane.DeployService.handler;
+import Features.ControlPlane.TeardownService.command;
+import Features.ControlPlane.TeardownService.handler;
+
+fn configureServices(dsn: string, nodeId: string, advertise: string): ServiceCollection {
+    let services = ServiceCollection();
+    services.addSingleton("ControlPlane", (sp) => { return store.ControlPlane(dsn, nodeId, advertise); });
+    return services;
+}
+
+fn buildApp(dsn: string, nodeId: string, advertise: string): App {
+    let app = App();
+    app.useServices(configureServices(dsn, nodeId, advertise));
+
+    app.get<GetTree>("/api/tree");
+    app.get<GetService>("/api/services/{name}");
+    app.get<GetNode>("/api/nodes/{id}");
+    app.get<NewServiceForm>("/api/nodes/{id}/new");
+    app.post<DeployService>("/api/services");
+    app.post<TeardownService>("/api/services/{name}/teardown");
+
+    app.useStatic("/", "./wwwroot");
+    return app;
+}
+
+fn main(): void {
+    let dsn = env.get("NOVA_ORCHWEB_DSN");
+    if (string.eql(dsn, "")) { dsn = "novadb://admin@127.0.0.1:3009?db=nova"; }
+    let nodeId = env.get("NOVA_ORCHWEB_NODE");
+    if (string.eql(nodeId, "")) { nodeId = "node-1"; }
+    let advertise = env.get("NOVA_ORCHWEB_ADVERTISE");
+    if (string.eql(advertise, "")) { advertise = "127.0.0.1"; }
+    let port = 8130;
+    let pe = env.get("NOVA_PORT");
+    if (!string.eql(pe, "")) { port = string.parseI64(pe) as int; }
+
+    let app = buildApp(dsn, nodeId, advertise);
+    console.log(`orchweb: control plane on http://127.0.0.1:${port} (store ${dsn})`);
+    app.run(port);
+}

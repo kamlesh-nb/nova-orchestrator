@@ -1,0 +1,31 @@
+// SSE response helpers. Every handler answers a Datastar `@get`/`@post` with a `text/event-stream` of
+// `datastar-patch-elements` frames; the client morphs each fragment onto the element whose id matches the
+// fragment's top-level id (#tree, #detail, #toast). These helpers build one, two, or three such frames.
+import web.response;
+import web.mediator;
+import datastar;
+import ds_sink;
+
+pub async fn one(a: string): Response {
+    let buf = ds_sink.BufferSink();
+    let gen = datastar.Sse.overBuffer(buf);
+    let _ = await gen.patchElementsSimple(a);
+    return mediator.sse(buf.contents());
+}
+
+pub async fn two(a: string, b: string): Response {
+    let buf = ds_sink.BufferSink();
+    let gen = datastar.Sse.overBuffer(buf);
+    let _1 = await gen.patchElementsSimple(a);
+    let _2 = await gen.patchElementsSimple(b);
+    return mediator.sse(buf.contents());
+}
+
+pub async fn three(a: string, b: string, c: string): Response {
+    let buf = ds_sink.BufferSink();
+    let gen = datastar.Sse.overBuffer(buf);
+    let _1 = await gen.patchElementsSimple(a);
+    let _2 = await gen.patchElementsSimple(b);
+    let _3 = await gen.patchElementsSimple(c);
+    return mediator.sse(buf.contents());
+}

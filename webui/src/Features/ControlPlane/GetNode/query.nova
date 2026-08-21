@@ -1,0 +1,7 @@
+// GET /api/nodes/{id} — show a node's information in the detail panel.
+import web.mediator;
+
+@serializable pub struct GetNode impl Message {
+    pub id: string,
+    init() { self.id = ""; }
+}

@@ -1,0 +1,14 @@
+// Loads a service's manifest editor into #detail.
+import web.response;
+import Features.ControlPlane.GetService.query;
+import Features.ControlPlane.Shared.store;
+import Features.ControlPlane.Shared.sse;
+import Features.ControlPlane.views.detail;
+
+pub struct GetServiceHandler impl RequestHandler<GetService, Response> {
+    cp: store.ControlPlane,
+    init(cp: store.ControlPlane) { self.cp = cp; }
+    async fn handle(self: GetServiceHandler, q: GetService): Response {
+        return await sse.one(detail.servicePanel(await self.cp.service(q.name)));
+    }
+}

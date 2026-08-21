@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nova Control Plane</title>
+  <link rel="stylesheet" href="/app.css">
+  <script type="module" src="https://cdn.jsdelivr.net/gh/starfederation/datastar/bundles/datastar.js"></script>
+</head>
+<body class="h-screen overflow-hidden bg-slate-100 text-slate-800">
+  <div class="flex h-screen flex-col">
+    <header class="flex items-center gap-3 border-b border-slate-800 bg-slate-900 px-6 py-3">
+      <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500 font-bold text-white">N</div>
+      <div>
+        <div class="text-sm font-semibold tracking-tight text-white">Nova Control Plane</div>
+        <div class="text-xs text-slate-400">orchweb &middot; live over NovaDB config store</div>
+      </div>
+      <span class="ml-auto inline-flex items-center gap-1.5 text-xs text-slate-400">
+        <span class="h-2 w-2 animate-pulse rounded-full bg-emerald-400"></span>connected
+      </span>
+    </header>
+    <div class="flex min-h-0 flex-1">
+      <aside class="w-80 shrink-0 overflow-y-auto border-r border-slate-200 bg-slate-900">
+        <!-- Datastar loads the tree when this element scrolls into view (i.e. on load) and refreshes it on
+             an interval, keeping the fleet view live; each response patches #tree in place. -->
+        <div id="tree" data-on-intersect="@get('/api/tree')" data-on-interval__duration.3s="@get('/api/tree')" class="p-4 text-xs text-slate-500">Loading cluster&hellip;</div>
+      </aside>
+      <main class="min-w-0 flex-1 overflow-y-auto p-6">
+        <div id="toast"></div>
+        <div id="detail">
+          <div class="flex h-full min-h-[60vh] items-center justify-center">
+            <div class="max-w-md text-center">
+              <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-100 text-2xl">&#9670;</div>
+              <h2 class="text-lg font-semibold text-slate-800">Select something from the tree</h2>
+              <p class="mt-1 text-sm text-slate-500">Click a node to deploy a service, or a service to view and edit its manifest.</p>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+  <!-- Datastar processes elements added by its MutationObserver; re-insert #tree once on load so its
+       loader attributes are picked up even if the initial-DOM scan misses them. -->
+  <script>window.addEventListener("load",function(){setTimeout(function(){var t=document.getElementById("tree");if(t){t.replaceWith(t.cloneNode(true));}},60);});</script>
+</body>
+</html>

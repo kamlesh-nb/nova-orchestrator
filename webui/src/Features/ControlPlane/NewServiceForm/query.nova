@@ -1,0 +1,7 @@
+// GET /api/nodes/{id}/new — open the new-service (deploy) form for a node.
+import web.mediator;
+
+@serializable pub struct NewServiceForm impl Message {
+    pub id: string,
+    init() { self.id = ""; }
+}

@@ -1,0 +1,17 @@
+// App-specific string helper for the views. HTML escaping is NOT defined here: the stdlib provides the one
+// canonical escaper as `web.response.escapeHtml`, so views call that directly and no app carries its own.
+// `jsq` stays here because it is specific to embedding a value inside a single-quoted Datastar signal
+// literal (data-signals="{k:'...'}"), which is not an HTML-escaping concern.
+import string;
+
+pub fn jsq(s: string): string {
+    let out = "";
+    let i = 0;
+    while (i < string.len(s)) {
+        let c = s[i];
+        if (c == 39 || c == 92) { out = out + "\\" + string.slice(s, i, i + 1); }
+        else { out = out + string.slice(s, i, i + 1); }
+        i = i + 1;
+    }
+    return out;
+}

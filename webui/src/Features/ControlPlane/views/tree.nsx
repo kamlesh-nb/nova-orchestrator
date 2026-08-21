@@ -1,0 +1,106 @@
+// The sidebar cluster tree: nodes -> services -> replica slots. Every level is a collapsible native
+// <details> whose caret toggles it; clicking a label runs a Datastar `@get` that loads the detail panel
+// (`__stop` keeps that click from also toggling the <details>). The top-level id is #tree so the SSE patch
+// morphs it in place. Written as plain NSX: expressions are embedded inline with `{...}`, glyphs are HTML
+// entities in a string literal (`{"&#9656;"}`), and nested markup composes directly.
+import list;
+import string;
+import web.response;
+import Domain.entities.cluster;
+
+fn pill(text: string, cls: string): string {
+    return <span class={"rounded px-1.5 py-0.5 text-[10px] font-medium " + cls}>{text}</span>;
+}
+
+fn isolationPill(mode: string): string {
+    if (string.eql(mode, "handoff")) { return pill(mode, "bg-indigo-500/20 text-indigo-300"); }
+    if (string.eql(mode, "public")) { return pill(mode, "bg-amber-500/20 text-amber-300"); }
+    if (string.eql(mode, "netns")) { return pill(mode, "bg-emerald-500/20 text-emerald-300"); }
+    return pill(mode, "bg-slate-700 text-slate-200");
+}
+
+fn replicaRow(r: cluster.ReplicaView): string {
+    return <div class="flex items-center justify-between gap-3 whitespace-nowrap py-1 pl-3 pr-2 text-sm text-slate-300">
+        <span>{`Replica ${r.index}`}</span>
+        <span class="font-mono text-xs text-slate-500">{response.escapeHtml(r.endpoint)}</span>
+    </div>;
+}
+
+fn replicaRows(sv: cluster.ServiceView): string {
+    let out = "";
+    let i = 0;
+    while (i < sv.replicas.size()) {
+        out = out + replicaRow(sv.replicas.get(i) ?? cluster.ReplicaView(0, "", ""));
+        i = i + 1;
+    }
+    return out;
+}
+
+fn serviceNode(sv: cluster.ServiceView, selected: bool): string {
+    let base = "flex min-w-0 flex-1 items-center gap-2 rounded-md py-1.5 pr-2 text-[15px] cursor-pointer hover:text-white ";
+    let labelCls = if (selected) base + "text-white bg-slate-800 ring-1 ring-indigo-500/40" else base + "text-slate-200";
+    return <details open>
+        <summary class="flex items-center gap-2 rounded-md py-1 pr-1 hover:bg-slate-800">
+            <span class="caret shrink-0 text-base text-slate-500">{"&#9656;"}</span>
+            <span data-on:click__stop={"@get('/api/services/" + sv.name + "')"} class={labelCls}>
+                <span class="truncate font-medium">{response.escapeHtml(sv.name)}</span>
+                <span class="ml-auto flex shrink-0 items-center gap-1">
+                    {isolationPill(sv.isolation)}
+                    {pill(`${sv.replicasMin}-${sv.replicasMax}`, "bg-slate-700 text-slate-300")}
+                </span>
+            </span>
+        </summary>
+        <div class="twig space-y-0.5 py-1">{replicaRows(sv)}</div>
+    </details>;
+}
+
+fn nodeSection(node: cluster.NodeView, servicesHtml: string, selected: bool): string {
+    let base = "flex min-w-0 flex-1 items-center gap-2 rounded-md py-1 pr-2 text-left cursor-pointer ";
+    let labelCls = if (selected) base + "bg-slate-800 ring-1 ring-emerald-500/40" else base;
+    return <div class="mb-1"><details open>
+        <summary class="flex items-center gap-2 rounded-md px-1 py-1.5 hover:bg-slate-800">
+            <span class="caret shrink-0 text-base text-slate-500">{"&#9656;"}</span>
+            <span data-on:click__stop={"@get('/api/nodes/" + node.id + "')"} class={labelCls}>
+                <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-slate-700 text-sm text-emerald-400">{"&#9670;"}</span>
+                <span class="truncate text-base font-semibold text-white">{response.escapeHtml(node.id)}</span>
+                <span class="ml-auto shrink-0 font-mono text-xs text-slate-500">{response.escapeHtml(node.address)}</span>
+            </span>
+        </summary>
+        <div class="twig mt-0.5 space-y-0.5">{servicesHtml}</div>
+    </details></div>;
+}
+
+fn servicesFor(services: list.List<cluster.ServiceView>, selKind: string, selName: string): string {
+    if (services.size() == 0) {
+        return <div class="py-1 pl-2 text-xs italic text-slate-500">no services yet</div>;
+    }
+    let out = "";
+    let i = 0;
+    while (i < services.size()) {
+        let sv = services.get(i) ?? cluster.ServiceView();
+        out = out + serviceNode(sv, string.eql(selKind, "service") && string.eql(selName, sv.name));
+        i = i + 1;
+    }
+    return out;
+}
+
+pub fn treeView(nodes: list.List<cluster.NodeView>, services: list.List<cluster.ServiceView>, selKind: string, selName: string): string {
+    let servicesHtml = servicesFor(services, selKind, selName);
+    let nodesHtml = "";
+    let n = 0;
+    while (n < nodes.size()) {
+        let nv = nodes.get(n) ?? cluster.NodeView("", "");
+        nodesHtml = nodesHtml + nodeSection(nv, servicesHtml, string.eql(selKind, "node") && string.eql(selName, nv.id));
+        n = n + 1;
+    }
+    if (string.eql(nodesHtml, "")) {
+        nodesHtml = <div class="px-2 py-1 text-xs italic text-slate-500">no nodes registered</div>;
+    }
+    return <div id="tree" class="p-2">
+        <div class="flex items-center justify-between px-1 pb-2 pt-1">
+            <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Cluster</span>
+            <span class="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400">{`${nodes.size()} node · ${services.size()} svc`}</span>
+        </div>
+        {nodesHtml}
+    </div>;
+}

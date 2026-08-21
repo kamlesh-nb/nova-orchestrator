@@ -1,0 +1,30 @@
+// POST /api/services — the manifest form's signals, sent as JSON by Datastar @post. Field names match the
+// form's data-bind signal names.
+import web.mediator;
+
+@serializable pub struct DeployService impl Message {
+    pub svcName: string,
+    pub binary: string,
+    pub restartPolicy: string,
+    pub repMin: int,
+    pub repMax: int,
+    pub expose: string,
+    pub servicePort: int,
+    pub portBase: int,
+    pub portFlag: string,
+    pub lbStrategy: string,
+    pub handoff: bool,
+    pub autoEnabled: bool,
+    pub metric: string,
+    pub setpoint: double,
+    pub healthPath: string,
+    pub routes: string,
+    init() {
+        self.svcName = ""; self.binary = ""; self.restartPolicy = "always";
+        self.repMin = 1; self.repMax = 1;
+        self.expose = "gateway-only"; self.servicePort = 8080; self.portBase = 0; self.portFlag = "";
+        self.lbStrategy = "roundrobin"; self.handoff = true;
+        self.autoEnabled = false; self.metric = "inflight"; self.setpoint = 0.0;
+        self.healthPath = "/healthz"; self.routes = "";
+    }
+}

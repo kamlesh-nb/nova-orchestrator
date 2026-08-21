@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+/* The content globs (which files to scan for class names, including the `.nsx` views) live in
+   tailwind.config.js at the app root, loaded here. */
+@config "../tailwind.config.js";
+
+/* App chrome not expressible as utilities: collapsible-tree carets and the dotted level guides. */
+summary { list-style: none; }
+summary::-webkit-details-marker { display: none; }
+.caret { transition: transform .15s ease; display: inline-block; }
+details[open] > summary .caret { transform: rotate(90deg); }
+.twig { border-left: 1px dotted #475569; margin-left: .7rem; padding-left: .7rem; }

@@ -1,0 +1,14 @@
+// Loads the new-service (deploy) form into #detail for a node.
+import web.response;
+import Features.ControlPlane.NewServiceForm.query;
+import Features.ControlPlane.Shared.store;
+import Features.ControlPlane.Shared.sse;
+import Features.ControlPlane.views.detail;
+
+pub struct NewServiceFormHandler impl RequestHandler<NewServiceForm, Response> {
+    cp: store.ControlPlane,
+    init(cp: store.ControlPlane) { self.cp = cp; }
+    async fn handle(self: NewServiceFormHandler, q: NewServiceForm): Response {
+        return await sse.one(detail.deployPanel(await self.cp.node(q.id)));
+    }
+}

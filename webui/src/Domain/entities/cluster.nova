@@ -1,0 +1,52 @@
+// Domain entities for the control-plane read model. These are plain data the views render; they carry no
+// dependency on the store or the manifest schema (the repository maps a manifest into a ServiceView).
+import list;
+
+// A cluster node (an orchd member).
+pub struct NodeView {
+    pub id: string,
+    pub address: string,
+    init(id: string, address: string) { self.id = id; self.address = address; }
+}
+
+// One desired replica slot of a service: its index and the endpoint + isolation it lands on.
+pub struct ReplicaView {
+    pub index: int,
+    pub endpoint: string,
+    pub mode: string,        // handoff | netns | loopback | public
+    init(index: int, endpoint: string, mode: string) {
+        self.index = index; self.endpoint = endpoint; self.mode = mode;
+    }
+}
+
+// A deployed service as the UI sees it: every field the manifest form edits, the tree summary, and the
+// desired replica slots. Named *View (not `Service`) to avoid clashing with the DI `Service` marker trait.
+pub struct ServiceView {
+    pub name: string,
+    pub binary: string,
+    pub restartPolicy: string,
+    pub replicasMin: int,
+    pub replicasMax: int,
+    pub expose: string,
+    pub servicePort: int,
+    pub portBase: int,
+    pub portFlag: string,
+    pub lbStrategy: string,
+    pub handoff: bool,
+    pub autoEnabled: bool,
+    pub metric: string,
+    pub setpoint: double,
+    pub healthPath: string,
+    pub routesCsv: string,
+    pub isolation: string,
+    pub replicas: list.List<ReplicaView>,
+    init() {
+        self.name = ""; self.binary = ""; self.restartPolicy = "always";
+        self.replicasMin = 1; self.replicasMax = 1;
+        self.expose = "gateway-only"; self.servicePort = 8080; self.portBase = 0; self.portFlag = "";
+        self.lbStrategy = "roundrobin"; self.handoff = true;
+        self.autoEnabled = false; self.metric = "inflight"; self.setpoint = 0.0;
+        self.healthPath = "/healthz"; self.routesCsv = ""; self.isolation = "";
+        self.replicas = list.List<ReplicaView>();
+    }
+}

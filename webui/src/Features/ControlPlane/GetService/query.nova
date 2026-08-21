@@ -1,0 +1,7 @@
+// GET /api/services/{name} — open a service's manifest editor in the detail panel.
+import web.mediator;
+
+@serializable pub struct GetService impl Message {
+    pub name: string,
+    init() { self.name = ""; }
+}

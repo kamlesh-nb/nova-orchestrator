@@ -1,0 +1,59 @@
+// Assembles a manifest from the submitted signals, validates it, and (only if valid) writes it to the store;
+// then refreshes the tree, shows the service editor, and reports the result in the toast.
+import string;
+import list;
+import web.response;
+import orch.manifest;
+import Features.ControlPlane.DeployService.command;
+import Features.ControlPlane.Shared.store;
+import Features.ControlPlane.Shared.sse;
+import Features.ControlPlane.views.tree;
+import Features.ControlPlane.views.detail;
+
+fn trimStr(s: string): string {
+    let a = 0;
+    let b = string.len(s);
+    while (a < b) { let c = s[a]; if (c != 32 && c != 9 && c != 10 && c != 13) { break; } a = a + 1; }
+    while (b > a) { let c = s[b - 1]; if (c != 32 && c != 9 && c != 10 && c != 13) { break; } b = b - 1; }
+    return string.slice(s, a, b);
+}
+
+fn manifestFrom(q: command.DeployService): manifest.Manifest {
+    let m = manifest.Manifest();
+    m.metadata.name = trimStr(q.svcName);
+    m.workload.binary = trimStr(q.binary);
+    m.workload.restartPolicy = q.restartPolicy;
+    m.replicas.min = q.repMin;
+    m.replicas.max = q.repMax;
+    m.network.expose = q.expose;
+    m.network.servicePort = q.servicePort;
+    m.network.portBase = q.portBase;
+    m.network.portFlag = trimStr(q.portFlag);
+    m.lb.strategy = q.lbStrategy;
+    m.lb.handoff = q.handoff;
+    m.autoscale.enabled = q.autoEnabled;
+    m.autoscale.metric = q.metric;
+    m.autoscale.setpoint = q.setpoint;
+    m.health.path = trimStr(q.healthPath);
+    let parts = string.split(q.routes, ",");
+    let i = 0;
+    while (i < parts.size()) {
+        let r = trimStr(parts.get(i) ?? "");
+        if (!string.eql(r, "")) { m.routes.push(r); }
+        i = i + 1;
+    }
+    return m;
+}
+
+pub struct DeployServiceHandler impl RequestHandler<DeployService, Response> {
+    cp: store.ControlPlane,
+    init(cp: store.ControlPlane) { self.cp = cp; }
+    async fn handle(self: DeployServiceHandler, q: DeployService): Response {
+        let m = manifestFrom(q);
+        let err = manifest.validateManifest(m);
+        if (!string.eql(err, "")) { return await sse.one(detail.toast("Rejected: " + err, false)); }
+        await self.cp.deploy(m);
+        let t = tree.treeView(await self.cp.nodes(), await self.cp.services(), "service", m.metadata.name);
+        return await sse.three(t, detail.servicePanel(store.viewOf(manifest.toYaml(m))), detail.toast("Deployed " + m.metadata.name + ".", true));
+    }
+}
