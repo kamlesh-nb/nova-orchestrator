@@ -562,6 +562,23 @@ async fn exchange(fd: long, kq: int, reqBytes: string, tmo: int): HttpMsg {
     return await readMessage(s, true, tmo);
 }
 
+// Select a healthy backend from `pool` and forward ONE request to it, returning the response bytes ("" if
+// there is no backend or the exchange failed). This is the request path's core (accept loops call the same
+// select+forward), exposed so live socket forwarding can be exercised end-to-end in a reactor test: a real
+// client request goes over a real TCP connection to a real backend and the reply comes back. Must run on a
+// reactor (it uses the per-reactor connection pool).
+pub async fn forwardOnce(pool: Pool, reqBytes: string, tmo: int): string {
+    let b = pool.select("");
+    if (b.port == 0) { return ""; }        // no healthy backend (port-0 sentinel)
+    return await forward(b, reqBytes, false, tmo);
+}
+
+// Probe a single backend's liveness the way the health checker does (a successful connect proves the port is
+// live). Exposed so a LIVE probe sweep can be gated in a reactor test. Must run on a reactor.
+pub async fn probeOnce(b: Backend, timeoutMs: int, path: string): bool {
+    return await probeBackend(b, timeoutMs, path);
+}
+
 // Forward ONE request to backend `b`, returning the response bytes ("" on failure). Reuses a warm
 // pooled connection when possible; if a reused connection turns out dead (empty read on first use),
 // retries ONCE on a fresh dial (HAProxy "safe reuse"). A connection is returned to the pool only when
