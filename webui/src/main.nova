@@ -43,12 +43,15 @@ fn buildApp(dsn: string, nodeId: string, advertise: string): App {
     let app = App();
     app.useServices(configureServices(dsn, nodeId, advertise));
 
-    app.get<GetTree>("/api/tree");
-    app.get<GetService>("/api/services/{name}");
-    app.get<GetNode>("/api/nodes/{id}");
-    app.get<NewServiceForm>("/api/nodes/{id}/new");
-    app.post<DeployService>("/api/services");
-    app.post<TeardownService>("/api/services/{name}/teardown");
+    // Mediator-dispatched routes (opt-in after the web realign): the handlers stay
+    // RequestHandler impls resolved from DI (useServices above), so `mediated<TReq>` is
+    // the routing shape, not the direct RouteHandler verb methods.
+    app.mediated<GetTree>("GET", "/api/tree");
+    app.mediated<GetService>("GET", "/api/services/{name}");
+    app.mediated<GetNode>("GET", "/api/nodes/{id}");
+    app.mediated<NewServiceForm>("GET", "/api/nodes/{id}/new");
+    app.mediated<DeployService>("POST", "/api/services");
+    app.mediated<TeardownService>("POST", "/api/services/{name}/teardown");
 
     app.useStatic("/", "./wwwroot");
     return app;

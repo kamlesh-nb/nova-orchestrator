@@ -2,15 +2,24 @@
 // `datastar-patch-elements` frames; the client morphs each fragment onto the element whose id matches the
 // fragment's top-level id (#tree, #detail, #toast). These helpers build one, two, or three such frames.
 import web.response;
-import web.mediator;
+import web.status;
 import datastar;
 import ds_sink;
+
+// Wrap already-encoded datastar SSE frames into a one-shot text/event-stream Response.
+// (Was `mediator.sse`, removed in the web realign; the connection closes after this body,
+// which is what a @get/@post fragment swap wants -- a live multi-patch stream uses app.sse.)
+fn sseResponse(body: string): Response {
+    return response.Response(Status.Ok, body)
+        .setHeader("Content-Type", "text/event-stream")
+        .setHeader("Cache-Control", "no-cache");
+}
 
 pub async fn one(a: string): Response {
     let buf = ds_sink.BufferSink();
     let gen = datastar.Sse.overBuffer(buf);
     let _ = await gen.patchElementsSimple(a);
-    return mediator.sse(buf.contents());
+    return sseResponse(buf.contents());
 }
 
 pub async fn two(a: string, b: string): Response {
@@ -18,7 +27,7 @@ pub async fn two(a: string, b: string): Response {
     let gen = datastar.Sse.overBuffer(buf);
     let _1 = await gen.patchElementsSimple(a);
     let _2 = await gen.patchElementsSimple(b);
-    return mediator.sse(buf.contents());
+    return sseResponse(buf.contents());
 }
 
 pub async fn three(a: string, b: string, c: string): Response {
@@ -27,5 +36,5 @@ pub async fn three(a: string, b: string, c: string): Response {
     let _1 = await gen.patchElementsSimple(a);
     let _2 = await gen.patchElementsSimple(b);
     let _3 = await gen.patchElementsSimple(c);
-    return mediator.sse(buf.contents());
+    return sseResponse(buf.contents());
 }
