@@ -66,7 +66,7 @@ fn nodeSection(node: cluster.NodeView, servicesHtml: string, selected: bool): st
                 <span class="ml-auto shrink-0 font-mono text-xs text-slate-500">{response.escapeHtml(node.address)}</span>
             </span>
         </summary>
-        <div class="twig mt-0.5 space-y-0.5">{servicesHtml}</div>
+        <div class="twig mt-0.5 space-y-0.5">{response.raw(servicesHtml)}</div>
     </details></div>;
 }
 
@@ -101,6 +101,6 @@ pub fn treeView(nodes: list.List<cluster.NodeView>, services: list.List<cluster.
             <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Cluster</span>
             <span class="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] text-slate-400">{`${nodes.size()} node · ${services.size()} svc`}</span>
         </div>
-        {nodesHtml}
+        {response.raw(nodesHtml)}
     </div>;
 }

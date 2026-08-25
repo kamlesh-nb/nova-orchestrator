@@ -34,7 +34,7 @@ pub fn servicePanel(sv: cluster.ServiceView): string {
             <span class="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-600">{response.escapeHtml(sv.isolation)}</span>
             <button data-on:click={"@post('/api/services/" + sv.name + "/teardown')"} class="ml-auto rounded-lg border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-100">Tear down</button>
         </div>
-        {form.manifestForm(sv, true, "Save changes")}
+        {response.raw(form.manifestForm(sv, true, "Save changes"))}
     </div>;
 }
 
@@ -57,10 +57,10 @@ pub fn nodePanel(node: cluster.NodeView, serviceCount: int): string {
         </div>
         <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Node information</h3>
-            {infoRow("Node ID", response.escapeHtml(node.id))}
-            {infoRow("Advertise address", response.escapeHtml(node.address))}
-            {infoRow("Role", "control plane (orchd)")}
-            {infoRow("Services on the cluster", `${serviceCount}`)}
+            {response.raw(infoRow("Node ID", response.escapeHtml(node.id)))}
+            {response.raw(infoRow("Advertise address", response.escapeHtml(node.address)))}
+            {response.raw(infoRow("Role", "control plane (orchd)"))}
+            {response.raw(infoRow("Services on the cluster", `${serviceCount}`))}
         </section>
     </div>;
 }
