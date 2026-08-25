@@ -23,11 +23,38 @@ import string;
 import datetime;
 import store.config;
 
+// True when a DbError is a lost-connection (transport) failure rather than an ordinary
+// SQL error. The novadb driver stamps SQLSTATE 08006 (connection_failure) on a send that
+// failed or a response that ended before ReadyForQuery, so a dead store no longer looks
+// like an empty result. Callers use this to tell "store unreachable" from "no such row".
+pub fn isConnError(e: DbError): bool { return string.eql(e.code, "08006"); }
+
 pub struct SqlConfigStore {
     conn: Connection,
+    // Reachability of the last store round-trip: set false when a read/CAS came back with a
+    // connection error (08006), true again on the next success. The HA lease and the health
+    // endpoints read this to degrade (step down, report not-ready) instead of silently
+    // treating a dead store as "the lease is free" / "there are no members".
+    pub reachable: bool,
 
     init(conn: Connection) {
         self.conn = conn;
+        self.reachable = true;
+    }
+
+    // Records whether the store is reachable, from a result's error. A connection error marks
+    // it unreachable; any other outcome (success, or an ordinary SQL error) means we reached it.
+    fn note(self: SqlConfigStore, e: DbError): void {
+        self.reachable = !isConnError(e);
+    }
+
+    // A cheap explicit reachability probe: round-trip the revision counter and report whether
+    // the store answered. Also refreshes `reachable` as a side effect.
+    pub async fn ping(self: SqlConfigStore): bool {
+        let none = list.List<DbValue>();
+        let rs = await self.conn.query("SELECT rev FROM config_meta WHERE id = 0", none);
+        self.note(rs.err);
+        return self.reachable;
     }
 
     // Create the config + meta tables and seed the revision counter. Idempotent enough for a single-writer
@@ -137,6 +164,7 @@ pub struct SqlConfigStore {
         let p = list.List<DbValue>();
         p.push(dbText(key));
         let rs = await self.conn.query("SELECT v, revision, updated_by, updated_at FROM config WHERE k = $1", p);
+        self.note(rs.err);
         if (rs.rowCount() == 0) { return undefined; }
         let r = rs.row(0);
         let e = config.ConfigEntry(key, r.getText(0), r.getInt(1) as long);
@@ -149,6 +177,7 @@ pub struct SqlConfigStore {
         let p = list.List<DbValue>();
         p.push(dbText(key));
         let rs = await self.conn.query("SELECT revision FROM config WHERE k = $1", p);
+        self.note(rs.err);
         return rs.rowCount() > 0;
     }
 
@@ -157,6 +186,7 @@ pub struct SqlConfigStore {
         let out = list.List<config.ConfigEntry>();
         let none = list.List<DbValue>();
         let rs = await self.conn.query("SELECT k, v, revision, updated_by, updated_at FROM config", none);
+        self.note(rs.err);
         let i = 0;
         while (i < rs.rowCount()) {
             let r = rs.row(i);
@@ -202,6 +232,7 @@ pub struct SqlConfigStore {
             ins.push(dbText(by));
             ins.push(dbInt(at));
             let ex = await self.conn.exec("INSERT INTO config (k, v, revision, updated_by, updated_at) VALUES ($1, $2, $3, $4, $5)", ins);
+            self.note(ex.err);
             if (ex.rows_affected == 0) {   // a racer created it between exists() and INSERT: CAS lost
                 let _r = await self.conn.rollback();
                 return -1 as long;
@@ -229,6 +260,7 @@ pub struct SqlConfigStore {
         up.push(dbText(key));
         up.push(dbInt(expectedRevision as int));
         let ex = await self.conn.exec("UPDATE config SET v = $1, revision = $2, updated_by = $3, updated_at = $4 WHERE k = $5 AND revision = $6", up);
+        self.note(ex.err);
         if (ex.rows_affected == 0) {   // key gone or revision moved: CAS lost
             let _r = await self.conn.rollback();
             return -1 as long;
@@ -255,6 +287,7 @@ pub struct SqlConfigStore {
         let out = list.List<config.ConfigEvent>();
         let none = list.List<DbValue>();
         let rs = await self.conn.query("SELECT k, v, revision, updated_by, updated_at FROM config", none);
+        self.note(rs.err);
         let i = 0;
         while (i < rs.rowCount()) {
             let r = rs.row(i);

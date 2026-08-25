@@ -21,6 +21,7 @@ pub struct AsyncLeaderLease {
     pub ttlMs: long,
     pub myEpoch: long,      // the epoch this node currently holds (0 when not leader)
     pub isLeader: bool,
+    pub storeReachable: bool, // reachability observed on the last reconcile tick (for /readyz)
 
     init(store: sqlconfig.SqlConfigStore, nodeId: string, key: string, ttlMs: long) {
         self.store = store;
@@ -29,6 +30,17 @@ pub struct AsyncLeaderLease {
         self.ttlMs = ttlMs;
         self.myEpoch = 0;
         self.isLeader = false;
+        self.storeReachable = true;
+    }
+
+    // The role this node reports right now: "leader" while it holds the lease, "standby" otherwise.
+    // Reachability is a separate axis carried on the HealthReport (storeReachable), and it is what
+    // makes /readyz report not-ready when the store is down, regardless of role. A leader that loses
+    // the store has already had isLeader cleared (renew/stillLeader step it down), so it reports
+    // "standby" + storeReachable=false rather than a stale "leader".
+    pub fn roleName(self: AsyncLeaderLease): string {
+        if (self.isLeader) { return "leader"; }
+        return "standby";
     }
 
     // Try to become leader: CAS-create when the lease is free, CAS-on-revision takeover when expired (or
@@ -44,6 +56,10 @@ pub struct AsyncLeaderLease {
     // is defence in depth for the multi-orchd topology.
     async fn hasQuorum(self: AsyncLeaderLease): bool {
         let mem = await self.store.list("members/");
+        // A store we cannot reach reads back as an EMPTY member list, which must NOT be
+        // mistaken for "membership not configured, single-node mode". If the store is
+        // unreachable we cannot confirm a quorum, so we do not hold one.
+        if (!self.store.reachable) { return false; }
         let n = mem.size();
         if (n == 0) { return true; }                 // membership not configured -> single-node mode
         let q = n / 2 + 1;
@@ -146,6 +162,15 @@ pub struct AsyncLeaderLease {
             let _ = await self.renew(nowMs);
         } else {
             let _ = await self.tryAcquire(nowMs);
+        }
+        // Degraded-store guard: if the round-trips above could not reach the store, step down
+        // (do not keep believing we are leader) and return without reading/converging desired
+        // state. Reconciling from an empty read of a dead store would drive every workload to
+        // "not desired" and tear the fleet down. storeReachable feeds /readyz -> not ready.
+        self.storeReachable = self.store.reachable;
+        if (!self.storeReachable) {
+            self.isLeader = false;
+            return false;
         }
         if (!await self.stillLeader(nowMs)) {
             return false;                                     // standby / fenced: read-only, do not reconcile

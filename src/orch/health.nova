@@ -94,6 +94,17 @@ pub fn standaloneReport(n: nativelet.Nativelet): HealthReport {
     return HealthReport("standalone", 0, "", true, n.jobs.size(), n.totalRunning(), n.underProvisioned(), 0, 0);
 }
 
+// A self-health report for an HA node, derived from the lease + nativelet after a reconcile tick.
+// The role and reachability come straight from the lease (roleName() maps an unreachable store to
+// "fenced"/"standby"), so when NovaDB is down this reports storeReachable=false -> healthy()=false,
+// ready()=false, and /readyz says "not ready" instead of the node silently pretending to lead.
+pub fn haReport(lease: asynclease.AsyncLeaderLease, n: nativelet.Nativelet): HealthReport {
+    let holder = "";
+    if (lease.isLeader) { holder = lease.nodeId; }
+    return HealthReport(lease.roleName(), lease.myEpoch, holder, lease.storeReachable,
+        n.jobs.size(), n.totalRunning(), n.underProvisioned(), 0, 0);
+}
+
 // Render Prometheus exposition text: node gauges + one line per workload (statuses = Nativelet.status(),
 // already in job order). A caller serves this verbatim at /metrics.
 // Escape a Prometheus label value (exposition format): `\`->`\\`, `"`->`\"`, LF->`\n`. Without this a
