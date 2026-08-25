@@ -14,7 +14,7 @@ import assert;
 import bytes;
 import db;
 import novadb;
-import net.reactor;
+import net.poller;
 import store.sqlconfig;
 import orch.asynclease;
 
@@ -73,8 +73,8 @@ async fn runLive(donePtr: long): void {
 
 @test
 fn test_async_lease_live_e2e(): void {
-    let r = reactor.Reactor(64, 8192, 32);
-    reactor.setCurrent(r.kq);
+    let r = poller.Reactor(64, 8192, 32);
+    poller.setCurrent(r.kq);
     let done = bytes.alloc(4);
     bytes.write_i32(done, 0, 0);
 
@@ -83,7 +83,7 @@ fn test_async_lease_live_e2e(): void {
     let guard = 0;
     while (bytes.read_i32(done, 0) < 1 && guard < 20000) {
         let nev = r.pollComplete(500);
-        reactor.batchBegin();
+        poller.batchBegin();
         let i = 0;
         while (i < nev) {
             nova_reactor_resume(r.completedToken(i));
@@ -93,7 +93,7 @@ fn test_async_lease_live_e2e(): void {
     }
 
     assert.equalInt(bytes.read_i32(done, 0) as int, 1);
-    reactor.setCurrent(0);
+    poller.setCurrent(0);
     bytes.free(done);
     r.destroy();
 }

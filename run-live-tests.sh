@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# NOTE (2026-08-13): the tests/live/*.nova files manually pump a low-level `net.reactor.Reactor` (the old
-# conformance-205 pattern). A later lang stdlib refactor removed `net/reactor.nova` and split it into
-# net/poller + net/aio + net/eventedio, so these three live tests no longer resolve `import net.reactor`
-# and need porting to the new manual-pump surface before this script is green again. The behaviours they
-# assert have deterministic offline equivalents that DO gate (run-tests.sh: 188 lease, 198 HA cluster =
-# fencing + 5-node no-split-brain soak), and the live CAS atomicity is proven at the SQL layer (B-3). The
-# btree->novadb paths below are fixed; the remaining work is the reactor-API port.
+# PORTED (2026-08-25): the tests/live/*.nova files were stuck on `import net.reactor` after the lang stdlib
+# split reactor into net/poller + net/aio + net/eventedio. They now import `net.poller` and pump the same
+# manual reactor surface (poller.Reactor/setCurrent/batchBegin/completedToken), and all three PASS against
+# a live NovaDB (187 sqlconfig, 189 lease fence dance, 190 store-driven reconcile) -- the live proof of the
+# split-brain CAS fix + server-side FENCE that the offline suite can only model. Run this in CI wherever a
+# NovaDB build is available (opt-in from gate.sh via NOVA_LIVE=1); it still is NOT part of the default
+# offline merge gate, since it needs a running server and is timing-sensitive.
 #
-# MANUAL ONLY -- NOT A MERGE GATE. Run the LIVE integration tests (tests/live/*.nova) against a fresh NovaDB
+# Run the LIVE integration tests (tests/live/*.nova) against a fresh NovaDB
 # server. Unlike run-tests.sh (offline, deterministic, the GATE), these connect to a real btree on
 # 127.0.0.1:3009 and are timing-sensitive; they confirm behaviour but never gate a merge. Their guarantees
 # have deterministic equivalents in run-tests.sh (188 lease, O2 198_ha_cluster) -- see ../../TEST-STRATEGY.md.

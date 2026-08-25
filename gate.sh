@@ -18,6 +18,14 @@ if [ $fail -eq 0 ]; then
   ./run-tests.sh || fail=1
 fi
 
+# Opt-in LIVE gate: with NOVA_LIVE=1 and a built NovaDB beside the toolchain, also run the live HA tests
+# (real store round-trips: split-brain CAS + server-side FENCE). Off by default so the merge gate stays
+# offline and server-free; CI that has a NovaDB build sets NOVA_LIVE=1 to prove the live path too.
+if [ $fail -eq 0 ] && [ "${NOVA_LIVE:-0}" = "1" ]; then
+  step "live HA tests vs a fresh NovaDB (opt-in: NOVA_LIVE=1)"
+  ./run-live-tests.sh || fail=1
+fi
+
 echo
 if [ $fail -eq 0 ]; then echo "GATE PASS  orchestrator (service/orchd/orchctl/orchweb)  [$OS]"; else echo "GATE FAIL  orchestrator  [$OS]"; fi
 exit $fail
