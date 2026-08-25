@@ -10,10 +10,14 @@
 import orch.nativelet;
 import orch.health;
 import orch.alerts;
+import orch.asynclease;
+import store.sqlconfig;
+import novadb;
 import net.aio;
 import cfg.config;
 import io.file;
 import string;
+import datetime;
 
 // O5: build a standalone self-health report each tick, render Prometheus text + orch_alert series to the
 // metrics file (for a node_exporter textfile collector), and log any CRITICAL alerts. Sync (no await), so
@@ -48,6 +52,50 @@ async fn runAll(n: nativelet.Nativelet, c: config.OrchConfig): int {
     return await nativelet.run(n, c.reconcileMs);
 }
 
+// Wall-clock milliseconds for lease deadlines. nowNs() is the same monotone-ish real clock the store
+// stamps updated_at from; ms keeps the lease TTL arithmetic in the units the lease compares in.
+fn nowMs(): long { return datetime.nowNs() / 1000000; }
+
+// The HA control loop (store-backed). Runs when `store.enabled`: connect to NovaDB eagerly at the top
+// (an async connect resolved lazily inside the loop would hit the nested-block-drive guard), build the
+// SqlConfigStore + lease, then each tick refresh/take leadership and -- ONLY as the valid leader --
+// reconcile the nativelet from the store's `workloads/` prefix. A standby, a fenced old leader, or a
+// node that has lost the store reconciles nothing (haReconcileTick returns false and, when the store is
+// unreachable, degrades to storeReachable=false). Discovery + probes still run every tick regardless of
+// role so a standby keeps its already-running replicas healthy. Metrics, when enabled, publish the HA
+// health report (role + storeReachable) rather than the standalone one.
+async fn haRun(n: nativelet.Nativelet, c: config.OrchConfig): int {
+    let dsn = config.storeConnectionString(c.store);
+    console.log(`orchd: HA mode, connecting to config store ${c.store.addr} db=${c.store.dbname}`);
+    let conn = await novadb.NovaDriver().connect(dsn);
+    let store = sqlconfig.SqlConfigStore(conn);
+    let _s = await store.ensureSchema();
+    // TTL is a few reconcile periods so a single slow tick does not drop leadership; floor at 15s.
+    let ttl = (c.reconcileMs * 5) as long;
+    if (ttl < 15000) { ttl = 15000; }
+    let lease = asynclease.AsyncLeaderLease(store, c.nodeId, "leases/orchd", ttl);
+
+    let metricsOn = !string.eql(c.metricsFile, "");
+    let t = alerts.AlertThresholds();
+    t.crashLoopRestarts = c.crashLoopRestarts;
+
+    while (true) {
+        let _acted = await lease.haReconcileTick(n, "workloads/", nowMs());
+        n.publishDiscovery();
+        let _p = await n.probeAndHeal();
+        if (metricsOn) {
+            let rep = health.haReport(lease, n);
+            let statuses = n.status();
+            let al = alerts.evaluate(rep, statuses, t);
+            let text = health.renderMetrics(rep, statuses) + alerts.renderAlertMetrics(al);
+            file.File.writeText(c.metricsFile, text);
+            if (alerts.criticalCount(al) > 0) { console.log(alerts.renderAlertLines(al)); }
+        }
+        let _sl = await aio.sleep(c.reconcileMs);
+    }
+    return 0;
+}
+
 fn main(): int {
     let path = config.resolveConfigPath("ORCHD_CONFIG", "orchd.json");
     let c = config.loadOrchConfig(path);
@@ -65,16 +113,22 @@ fn main(): int {
 
     let disc = if (string.eql(c.discoveryFile, "")) "off" else c.discoveryFile;
     let met = if (string.eql(c.metricsFile, "")) "off" else c.metricsFile;
-    console.log(`orchd: node=${c.nodeId} reconcile=${c.reconcileMs}ms manifests=${c.manifestsDir} discovery=${disc} metrics=${met}`);
-    // holdReactors before the block-drive (the reconcile loop's async probes need live reactors), then
-    // run the reconcile loop forever. nativelet.run is async; calling it from sync main() block-drives it.
+    let mode = if (c.store.enabled) "ha(store)" else "standalone(manifests)";
+    console.log(`orchd: node=${c.nodeId} mode=${mode} reconcile=${c.reconcileMs}ms manifests=${c.manifestsDir} discovery=${disc} metrics=${met}`);
+    // holdReactors before the block-drive (the reconcile loop's async probes + the store connection need
+    // live reactors), then run forever. The run fns are async; calling from sync main() block-drives them.
     aio.holdReactors();
     let n = nativelet.Nativelet(c.manifestsDir);
     // Publish live service endpoints for service to load-balance across (no-op unless discoveryFile is set).
     n.discoveryFile = c.discoveryFile;
     n.advertiseHost = c.advertiseHost;
     n.servicePath = c.servicePath;   // when set, orchd launches each handoff workload's service too
-    // Block-drive the async composition root (reconcile loop + optional metrics publisher).
-    let _ = runAll(n, c);
+    if (c.store.enabled) {
+        // HA: connect to the config store and run the leader-lease-gated store reconcile loop.
+        let _ = haRun(n, c);
+    } else {
+        // Standalone: reconcile from the local manifests directory (no store, no lease).
+        let _ = runAll(n, c);
+    }
     return 0;
 }
