@@ -1,0 +1,78 @@
+# CLAUDE.md — nova-orchestrator
+
+A container-free, Kubernetes-style orchestration stack written in **Nova**: a control plane that
+supervises workloads (native processes, not containers) with rolling updates, readiness gates,
+service discovery, autoscaling, and an HA config store on NovaDB.
+
+## Binaries (`bin/`)
+
+- **`orchd`** — the control plane: reconciles a declarative YAML manifest, supervises replicas,
+  runs rolling updates + the leader lease (HA), writes the discovery file.
+- **`service`** — the data-plane gateway (k8s-Service-style): a stable front address that
+  load-balances to replicas. Two modes: normal L7 proxy (parses HTTP, forwards) and the **fd-handoff**
+  mode (out-of-path L4 — see below).
+- **`orchctl`** — offline CLI (inspect/apply/scale).
+- **`artifactd`** — content-addressed artifact daemon (blob store + registry).
+
+## Build / run / test
+
+```bash
+nova build --release            # builds bin/*.nova (reads project.json)
+./run-tests.sh                  # runs every tests/*.nova via `nova test`
+```
+
+## Layout
+
+- `src/net/` — `proxy.nova` (LB pool + the fd-handoff serve loop), `service.nova`, `autoscale.nova`,
+  `netns.nova`.
+- `src/orch/` — `manifest.nova`, `supervisor.nova`, `rollout.nova`, `lease.nova`/`asynclease.nova`
+  (HA leader lease), `health.nova`, `spec.nova`, `membership.nova`, `autoscaler.nova`, `isolation.nova`.
+- `src/store/` — the config store (`config.nova`, `sqlconfig.nova` on NovaDB).
+- `src/artifacts/` — blob store + registry. `docs/` — design + `platform-readiness.md` (the roadmap).
+
+## The fd-handoff data plane — and the Windows alternative (READ before touching handoff)
+
+**What it is (POSIX).** In handoff mode `service` is a zero-copy L4 gateway. It binds an **AF_UNIX**
+rendezvous socket and the front TCP port; each backend `app` connects to the rendezvous as a control
+channel. On a new client connection, `service` picks a backend and **passes the client socket
+file descriptor to the app** — `os.socket.sendFd(ctrl, clientFd, payload)` (`src/net/proxy.nova`
+~L906), which on POSIX sends the fd as `SCM_RIGHTS` ancillary data over the AF_UNIX channel
+(`lang/src/lib/std/os/posix/socket.nova`). The app then owns the socket and replies to the client
+directly; `service` is out of the data path entirely. The app receives it via
+`os.socket.recvFd(ctrl, cap)`.
+
+**Two invariants that look like bugs if broken:**
+- The rendezvous path is `/tmp/nova-<name>.sock` and the **short path is DELIBERATE** — AF_UNIX
+  `sun_path` caps at ~104 bytes on macOS / ~108 on Linux. Do **NOT** "portably" swap `/tmp` for
+  `dir.tempDir()` (`$TMPDIR` → `/var/folders/...`) — it overflows `sun_path` and breaks the macOS bind.
+- The path is derived identically in `bin/service.nova`, `src/orch/spec.nova`, and
+  `src/orch/manifest.nova` (from the workload name), and `NOVA_HANDOFF_SOCK` overrides it — service and
+  apps MUST agree, so keep the derivation in one place if you change it.
+
+**Windows: SCM_RIGHTS does not exist — the handoff needs `WSADuplicateSocket`.**
+Today `lang/src/lib/std/os/windows/socket.nova` `sendFd`/`recvFd` are **stubs returning `-1`**: the
+handoff compiles on Windows but fails at runtime. Windows has no ancillary-data fd passing (even its
+AF_UNIX, Win10 1803+, carries no `SCM_RIGHTS`). The cross-platform equivalent is to duplicate the
+socket by value into the target process:
+
+1. **Control channel:** replace the AF_UNIX rendezvous with a **named pipe** (`\\.\pipe\nova-<name>`)
+   or loopback TCP — the rendezvous "path" becomes a pipe name, not a filesystem path, so the
+   derivation in `spec.nova`/`manifest.nova`/`service.nova` must be **target-conditional** (short
+   `/tmp/*.sock` on POSIX, `\\.\pipe\nova-*` on Windows).
+2. The app connects and sends its **PID** to `service` up front (WSADuplicateSocket targets a PID).
+3. `service` calls `WSADuplicateSocket(clientSock, appPid, &protocolInfo)` → a `WSAPROTOCOL_INFO`
+   blob valid only for that PID, then sends that fixed-size blob over the control channel (any channel
+   works — the blob, not an fd, is the payload).
+4. The app calls `WSASocketW(af, type, proto, &protocolInfo, 0, WSA_FLAG_OVERLAPPED)` to materialise
+   **the same underlying socket**, then — for the IOCP reactor — `CreateIoCompletionPort`s it onto its
+   own completion port BEFORE the first overlapped op (an unassociated socket delivers completions
+   nowhere; see the lang CLAUDE.md IOCP notes). `service` then closes its copy.
+
+**Where to implement:** the `os.socket` seam (`sendFd`/`recvFd`) is the right place, but the Windows
+semantics differ from POSIX (you need the target PID before duplicating, and the payload is a blob not
+an fd number). So either give the seam a Windows-aware shape (pass PID + return/accept the blob) or add
+`dupSocketToPid`/`adoptSocketFromBlob` alongside it, and branch the control-channel + path logic in
+`src/net/proxy.nova` on the target OS. Track: `docs/platform-readiness.md` row **C-Iso** ("confirm
+fd-handoff on Win/macOS"). macOS already works (BSD `SCM_RIGHTS`); Windows is the open port. Also verify
+the POSIX handoff under **io_uring** — a proactor's in-flight ops + inherited socket state differ from
+epoll/kqueue.
