@@ -11,7 +11,11 @@ import string;
 
 pub struct Spec {
     pub name: string,           // unique workload key
-    pub binaryPath: string,     // native executable to exec
+    pub binaryPath: string,     // native executable to exec (a LOCAL path; resolved from `artifact` when set)
+    // Content-addressed artifact: a "sha256:<hex>" the binary is fetched-by-hash and verified as, instead
+    // of shipping a local path. When set, orchd pulls it into its blob cache and points binaryPath at the
+    // cached file (see orch/artifact.nova). Empty = legacy mode, binaryPath is used as-is.
+    pub artifact: string,
     pub args: List<string>,     // argv (excluding the binary itself)
     pub restartPolicy: string,  // "always" | "on-failure" | "never"
     pub replicas: int,          // how many copies to keep running (>=1)
@@ -54,6 +58,7 @@ pub struct Spec {
     init(name: string, binaryPath: string) {
         self.name = name;
         self.binaryPath = binaryPath;
+        self.artifact = "";
         self.args = List<string>();
         self.restartPolicy = "never";
         self.replicas = 1;
@@ -85,6 +90,7 @@ pub fn parseSpec(text: string): Spec {
     let name = json.asString(json.get(root, "name")) ?? "";
     let bin = json.asString(json.get(root, "binaryPath")) ?? "";
     let s = Spec(name, bin);
+    s.artifact = json.asString(json.get(root, "artifact")) ?? "";
 
     s.restartPolicy = json.asString(json.get(root, "restartPolicy")) ?? "never";
     let reps = (json.asNumber(json.get(root, "replicas")) ?? 1) as int;

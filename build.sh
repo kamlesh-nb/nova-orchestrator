@@ -3,6 +3,7 @@
 #   service  -- the data plane   (L7 reverse proxy / load balancer)
 #   orchd    -- the control plane (nativelet reconcile loop)
 #   orchctl  -- the operator CLI  (writes desired state, offline ops)
+#   artifactd-- the artifact origin (content-addressed blob store for deploy binaries; CI pushes, orchd pulls)
 #   orchweb  -- the operator UI   (a Tailwind web app under webui/: node/service/replica tree + manifest forms)
 #
 # Each entrypoint lives in bin/ and pulls only its slice of the package via the import graph, so the
@@ -72,6 +73,8 @@ echo "Building orchd (control plane)...${target:+ [target=$target]}"
 build_one orchd bin/orchd.nova
 echo "Building orchctl (operator CLI)...${target:+ [target=$target]}"
 build_one orchctl bin/orchctl.nova
+echo "Building artifactd (blob origin)...${target:+ [target=$target]}"
+build_one artifactd bin/artifactd.nova
 # orchweb is the OPTIONAL control-plane UI; its sources live under webui/ (a work-in-progress tree). Build
 # it best-effort so a missing or not-yet-building webui never fails the core stack (service/orchd/orchctl),
 # which is what the platform slice and the acceptance test actually depend on.
@@ -88,6 +91,7 @@ echo "Built:"
 echo "  $outdir/service$ext"
 echo "  $outdir/orchd$ext"
 echo "  $outdir/orchctl$ext"
+echo "  $outdir/artifactd$ext"
 if [ "$orchweb_built" = 1 ]; then echo "  $outdir/orchweb$ext"; fi
 echo
 echo "Validate a config without serving:  $outdir/service$ext service.json --check"
