@@ -1,0 +1,116 @@
+name: CI
+
+# The orchestrator (service / orchd / orchctl / artifactd) is NOVA code, so unlike nls it needs a built
+# `nova` on PATH -- which means building the lang toolchain (with LLVM) first. Its test harness also
+# assumes the monorepo layout (run-tests.sh uses ../../lang and resolves packages through ../packages),
+# so CI reconstructs that layout by checking out three repos into fixed paths:
+#
+#   lang/                        <- kamlesh-nb/nova   (the compiler; built here, installs `nova`)
+#   packages/nova-orchestrator/  <- this repo
+#   packages/nova-novadb/        <- kamlesh-nb/nova-novadb  (the `import novadb` driver the store uses)
+#
+# SCOPE -- CORE ONLY. build.sh builds service/orchd/orchctl/artifactd and skips orchweb best-effort;
+# the test step runs tests/*.nova only. The orchweb UI and webui/tests are EXCLUDED because they
+# `import datastar`, and nova-datastar is a gitignored, vendored package with no upstream repo to check
+# out here. Publish/vendor datastar to extend this gate to the UI. The opt-in NOVA_LIVE HA tests (real
+# NovaDB round-trips) are also out of scope -- CI stays offline and server-free.
+#
+# Linux only (x86_64 + arm64): the orchestrator is a Linux production concern -- its zero-downtime
+# fd-handoff is AF_UNIX/SCM_RIGHTS (POSIX-only by design) and it targets Linux deployment. macOS and
+# Windows are not gated here.
+#
+# If `nova`/`nova-novadb` are private, set NOVA_TOKEN to a PAT with read access (falls back to
+# GITHUB_TOKEN, which works when the repos share an owner and it is permitted).
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, runner: ubuntu-latest }
+          - { name: linux-arm64,  runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: packages/nova-orchestrator }
+      - uses: actions/checkout@v4
+        with:
+          repository: kamlesh-nb/nova
+          path: lang
+          token: ${{ secrets.NOVA_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: kamlesh-nb/nova-novadb
+          path: packages/nova-novadb
+          token: ${{ secrets.NOVA_TOKEN || github.token }}
+
+      - uses: mlugg/setup-zig@v2
+        with: { version: 0.16.0 }
+
+      - name: Cache Zig build cache (lang)
+        uses: actions/cache@v4
+        with:
+          path: lang/.zig-cache
+          key: zigcache-orch-${{ matrix.name }}-${{ hashFiles('lang/build.zig', 'lang/build.zig.zon', 'lang/src/**', 'lang/deps/**/*.zig') }}
+          restore-keys: zigcache-orch-${{ matrix.name }}-
+
+      - name: Cache apt LLVM debs
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-llvm-cache
+          key: apt-llvm-orch-${{ matrix.name }}-21
+
+      - name: Install LLVM 21
+        run: |
+          sudo apt-get update
+          wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 21
+          mkdir -p ~/apt-llvm-cache
+          sudo cp -n ~/apt-llvm-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+          sudo apt-get install -y llvm-21-dev libclang-21-dev clang-21 zlib1g-dev libzstd-dev libxml2-dev liblzma-dev
+          cp -u /var/cache/apt/archives/*.deb ~/apt-llvm-cache/ 2>/dev/null || true
+          sudo ln -sf "$(command -v clang++-21)" /usr/local/bin/clang++
+          echo "NOVA_LLVM_PREFIX=/usr/lib/llvm-21" >> "$GITHUB_ENV"
+          /usr/lib/llvm-21/bin/llvm-config --version
+
+      # ReleaseFast: a Debug nova's leak gate exits 1 on every `nova build`/`nova test`, which would fail
+      # build.sh and the test loop while printing a pass. Installs `nova` to ~/.nova/bin.
+      - name: Build the Nova toolchain (ReleaseFast)
+        working-directory: lang
+        run: zig build -Doptimize=ReleaseFast
+
+      - name: Build orchestrator core (service/orchd/orchctl/artifactd; orchweb skipped best-effort)
+        working-directory: packages/nova-orchestrator
+        run: |
+          export PATH="$HOME/.nova/bin:$PATH"
+          ./build.sh
+
+      # Core offline suite only (tests/*.nova). run-tests.sh also globs webui/tests, which need datastar;
+      # we mirror its per-test logic here minus that glob. Run from lang/ so `../packages` resolves.
+      - name: Core tests (tests/*.nova)
+        shell: bash
+        run: |
+          export PATH="$HOME/.nova/bin:$PATH"
+          cd lang
+          ORCH="$GITHUB_WORKSPACE/packages/nova-orchestrator"
+          pass=0; fail=0
+          for t in "$ORCH"/tests/*.nova; do
+            if nova test "$t" >/tmp/orch.log 2>&1 && grep -q "0 failed" /tmp/orch.log; then
+              echo "PASS  $(basename "$t")"; pass=$((pass+1))
+            else
+              echo "::error::FAIL $(basename "$t")"; tail -8 /tmp/orch.log; fail=$((fail+1))
+            fi
+          done
+          echo "----------------------------------------"
+          echo "orchestrator core: $pass passed, $fail failed"
+          [ "$fail" -eq 0 ]
