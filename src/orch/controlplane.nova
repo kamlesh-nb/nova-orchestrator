@@ -108,7 +108,25 @@ pub fn appJson(reg: Registry, name: string): string {
     return AppStatus__toJson(reg.status(name));
 }
 
-fn cell(v: string): string { return `<td>${v}</td>`; }
+// HTML-escape a text value before it goes into a `<td>`: an app name (or metric/lb/isolation string) that
+// contains `<`, `>`, `&`, `"`, or `'` must not be able to inject markup into the dashboard table.
+fn htmlEscape(s: string): string {
+    let out = "";
+    let i = 0;
+    while (i < string.len(s)) {
+        let c = s[i];
+        if (c == 38) { out = out + "&amp;"; }        // &
+        else if (c == 60) { out = out + "&lt;"; }    // <
+        else if (c == 62) { out = out + "&gt;"; }    // >
+        else if (c == 34) { out = out + "&quot;"; }  // "
+        else if (c == 39) { out = out + "&#39;"; }   // '
+        else { out = out + string.charAt(s, i); }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn cell(v: string): string { return `<td>${htmlEscape(v)}</td>`; }
 
 fn appsTable(ss: list.List<AppStatus>): string {
     let rows = "";

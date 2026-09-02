@@ -16,9 +16,8 @@ in-memory reference store. On the live NovaDB path the compare-and-set is not at
 split-brain hole. There are zero TODO/FIXME/stub markers in the tree; the incompleteness is architectural, not
 littered, so it is easy to miss.
 
-One caveat for anyone building on this: the working tree currently has uncommitted modifications (README,
-`src/orch/{controlplane,manifest,nativelet}.nova`, `tests/186_controlplane.nova`, `gate.sh`, `run-tests.sh`,
-`build.sh`, `docs/runbooks.md`). This analysis reads the working-tree state.
+This analysis reads the committed tree state (the working tree is clean; the edits that were in flight when
+this document was first written have since been committed).
 
 ## Findings tracking table
 

@@ -52,7 +52,15 @@ pub struct NetPlan {
 // its own namespace + /30 (replicas of one app can then all bind the same port on their private
 // address). Pure — no side effects, testable anywhere.
 pub fn plan(name: string, idx: int): NetPlan {
-    let base = `10.66.${idx}.`;
+    // Bound the address so a large slot index can never emit an invalid dotted-quad (the old
+    // `10.66.${idx}.` overflowed to 10.66.256.x past idx 255). idx is the third octet for idx 0..255
+    // (10.66.idx.1 / .2, unchanged); beyond that it spills into the second octet (10.67.x, 10.68.x, ...).
+    // Both octets are kept in 0..255 by construction, so the result is always a valid address; a fleet
+    // would exhaust the 10.66.0.0/16 space long before the modulo could wrap onto a live slot.
+    let slot = if (idx < 0) 0 else idx;
+    let o2 = 66 + ((slot / 256) % 190);   // 66..255
+    let o3 = slot % 256;                  // 0..255
+    let base = `10.${o2}.${o3}.`;
     return NetPlan(name, `nova-${name}-${idx}`, `nvh${idx}`, `nva${idx}`, base + "1", base + "2");
 }
 

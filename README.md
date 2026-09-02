@@ -22,16 +22,21 @@ It bundles the whole I1–I4 infrastructure tier:
 
 The stack ships as **separate binaries** along the same data-plane / control-plane line Kubernetes draws
 between `kube-proxy` and the controller manager. Each entrypoint lives in `bin/` and pulls only its slice
-of the package through the import graph, so dead-code elimination keeps them genuinely separate.
+of the package through the import graph, so dead-code elimination keeps them genuinely separate. The four
+`bin/` entrypoints are `service`, `orchd`, `orchctl`, and `artifactd`:
 
 | Binary | Plane | Owns | Modules |
 |--------|-------|------|---------|
 | **`service`** | data | traffic: L7 reverse proxy, load balancing, health-checked membership, service VIPs | `net.proxy`, `net.service`, `net.autoscale` |
 | **`orchd`**  | control | desired state: manifest reconcile, replica supervision, restart policy, isolation, leader lease, config store, `/metrics` + alerts | `orch.*`, `store.*`, `os.sandbox` |
 | **`orchctl`** | ops | an OFFLINE operator CLI over a config-store backup dump: inspect, edit cluster membership, print a rolling-upgrade plan | `orch.membership`, `orch.backup`, `orch.rollout` |
-| **`orchweb`** | ops | a WRITABLE control-plane UI (a Tailwind web app under `webui/`): a node -> service -> replica tree, click a service for its complete manifest as an editable form, click a node to deploy a service | `orch.controlplane`, `orch.manifest`, `store.sqlconfig`, `web.*` |
+| **`artifactd`** | data | the content-addressed blob daemon: a deploy-artifact origin that stores native binaries keyed by their sha256 (idempotent, verified) and serves them by hash to each orchd node before it spawns a replica | `artifacts.blobstore`, `artifacts.registry`, `artifacts.service`, `web.*` |
 
-`orchweb` is the live, browser-facing sibling of `orchctl` -- a full vertical-slice Nova web app
+`orchweb` is **not** a `bin/` entrypoint: it is the live, browser-facing sibling of `orchctl`, a WRITABLE
+control-plane UI (a Tailwind web app whose entry point is `webui/src/main.nova`, built via `./build.sh`).
+It presents a node -> service -> replica tree, a service's complete manifest as an editable form, and a
+per-node deploy screen, over `orch.controlplane`, `orch.manifest`, `store.sqlconfig`, and `web.*`. It is
+a full vertical-slice Nova web app
 (`webui/`, scaffolded like `nova init web`: `src/Features/ControlPlane/...`, `wwwroot/`, `project.json`).
 The sidebar is a tree of cluster nodes (`members/<id>`) -> services (`workloads/<name>`) -> desired replica
 slots. Clicking a service opens its complete manifest as an editable form; clicking a node opens a deploy
@@ -43,6 +48,19 @@ those keys and converges the fleet. So an action actually spawns, scales, or sto
 NovaDB via `NOVA_ORCHWEB_DSN` (default `novadb://admin@127.0.0.1:3009?db=nova`), seeds the local node
 (`NOVA_ORCHWEB_NODE`, default `node-1`), and serves on `NOVA_PORT` (default 8130). Build: `./build.sh`
 (builds `webui/src/main.nova`).
+
+### Security: artifactd is plain HTTP behind a bearer token
+
+`artifactd` serves the blob origin over **plain HTTP** (no TLS of its own) and authenticates writes with a
+single bearer token read from `NOVA_ARTIFACT_TOKEN`. This is a deliberate stopgap, so be honest about what
+it means in production:
+
+- **It MUST sit behind TLS termination** (a reverse proxy or the platform's own `service` with TLS) on any
+  network you do not fully trust. Uploaded artifacts and the bearer token itself cross the wire in the
+  clear otherwise.
+- **An empty `NOVA_ARTIFACT_TOKEN` disables auth entirely** (the daemon logs `auth=OFF (dev)` at startup).
+  That is for local development only. In production, always set a strong token, and terminate TLS in front
+  of it.
 
 They share no process and forward nothing to each other directly. The **only** coupling is a
 service-discovery file, and it is fully wired:

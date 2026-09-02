@@ -746,8 +746,10 @@ pub fn bindAddrFor(host: string): long {
 async fn proxyAcceptLoop(pool: Pool, host: string, port: int, tmo: int): int {
     // Reactor-native front-port listener, mirroring web/app.nova's reactorWorkerBody: a SO_REUSEPORT
     // socket bound on THIS reactor, accepted via eventedio on the current kq. This replaces the retired
-    // Asio serverListen/aaccept path (those runtime hooks are now stubs). Binds INADDR_ANY; a specific
-    // Service VIP host is a follow-up (needs host->addr resolution on the reactor bind path).
+    // Asio serverListen/aaccept path (those runtime hooks are now stubs). The bind address comes from
+    // bindAddrFor(host): an empty host binds INADDR_ANY (all interfaces), a dotted-quad or resolvable
+    // Service VIP host binds that specific address, and an unresolvable host is reported and falls back to
+    // INADDR_ANY.
     let lfd = sys.socket(sys.AF_INET, sys.SOCK_STREAM, 0);
     let one = bytes.alloc(4);
     bytes.write_i32(one, 0, 1);

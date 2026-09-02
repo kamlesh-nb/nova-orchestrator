@@ -482,11 +482,25 @@ async fn httpProbe(host: string, port: int, path: string, tmo: int): bool {
     let _ = s.setTimeout(tmo);
     let n = await s.recvInto(buf, cap);
     s.close();
-    if (n <= 12) { bytes.free(buf); return false; }   // need at least "HTTP/1.1 xxx"
-    // status code is the 3 bytes after the first space (offset 9 in "HTTP/1.1 200")
-    let c0 = bytes.read_byte(buf, 9);
+    if (n <= 0) { bytes.free(buf); return false; }
+    // Parse the status code out of the status line robustly, WITHOUT assuming the version token is exactly
+    // "HTTP/1.1 ". The status line is `<version> <code> <reason>`, so: scan to the first space (end of the
+    // version token, whatever it is -- "HTTP/1.0", "HTTP/1.1", "HTTP/2"), skip any run of spaces, then read
+    // up to three decimal digits as the code. 2xx/3xx = healthy (200..399), same semantics as before.
+    let i = 0;
+    while (i < n && bytes.read_byte(buf, i) != 32) { i = i + 1; }   // 32 = ' '
+    while (i < n && bytes.read_byte(buf, i) == 32) { i = i + 1; }   // skip extra spacing
+    let code = 0;
+    let digits = 0;
+    while (i < n && digits < 3) {
+        let ch = bytes.read_byte(buf, i);
+        if (ch < 48 || ch > 57) { break; }             // 48..57 = '0'..'9'
+        code = code * 10 + (ch - 48);
+        digits = digits + 1;
+        i = i + 1;
+    }
     bytes.free(buf);
-    return c0 == 50 || c0 == 51;                       // '2' (2xx) or '3' (3xx)
+    return digits == 3 && code >= 200 && code < 400;   // 2xx (2xx) or 3xx
 }
 
 fn nameIn(names: list.List<string>, target: string): bool {

@@ -41,6 +41,39 @@ pub fn hasFlag(name: string): bool {
     return false;
 }
 
+// ---- present-but-wrong-type detection (loud-fail) ----
+//
+// A missing key legitimately falls back to the field default (dev convenience). But a key that IS
+// present with the wrong JSON type (a string where a number is wanted, and so on) must FAIL LOUDLY at
+// startup, to honour the README promise: "a present file with a bad value fails loudly at startup, never
+// silently defaults." The plain `?? default` extraction below cannot tell "absent" from "present but
+// malformed", so these helpers do: each returns a non-empty reason when `key` is present in `obj` but not
+// decodable as the expected type, else "". loadX() accumulates the first such reason into `loadError`,
+// and validateX() reports it before anything else.
+fn badString(obj: json.JsonValue, key: string, label: string): string {
+    if (json.has(obj, key) && json.asString(json.get(obj, key)) == undefined) {
+        return `${label} must be a string`;
+    }
+    return "";
+}
+fn badNumber(obj: json.JsonValue, key: string, label: string): string {
+    if (json.has(obj, key) && json.asNumber(json.get(obj, key)) == undefined) {
+        return `${label} must be a number`;
+    }
+    return "";
+}
+fn badBool(obj: json.JsonValue, key: string, label: string): string {
+    if (json.has(obj, key) && json.asBool(json.get(obj, key)) == undefined) {
+        return `${label} must be a boolean`;
+    }
+    return "";
+}
+// Keep the FIRST non-empty reason: `acc = firstErr(acc, badX(...))` chains checks left to right.
+fn firstErr(a: string, b: string): string {
+    if (!string.eql(a, "")) { return a; }
+    return b;
+}
+
 // ---- service (data plane) ----
 
 // One static backend in the proxy pool. `weight` drives the Weighted LB strategy (default 1).
@@ -71,6 +104,8 @@ pub struct ProxyConfig {
     // (written by orchd's ServiceRegistry) instead of, or in addition to, the static `backends` list.
     pub discoveryFile: string,
     pub discoveryService: string,
+    // Set by loadProxyConfig when a present field has the wrong JSON type; validateProxy fails on it.
+    pub loadError: string,
     init() {
         self.listenHost = "";
         self.listenPort = 8080;
@@ -85,6 +120,7 @@ pub struct ProxyConfig {
         self.backends = list.List<BackendCfg>();
         self.discoveryFile = "";
         self.discoveryService = "";
+        self.loadError = "";
     }
 }
 
@@ -94,6 +130,38 @@ pub fn loadProxyConfig(path: string): ProxyConfig {
     let c = ProxyConfig();
     if (!file.File.exists(path)) { return c; }
     let root = json.parse(file.File.readText(path));
+
+    // Loud-fail on present-but-wrong-type fields (see badString/badNumber/badBool). A truly ABSENT key
+    // still falls back to its default via the `?? default` extraction below.
+    let e = "";
+    e = firstErr(e, badString(root, "listenHost", "listenHost"));
+    e = firstErr(e, badNumber(root, "listenPort", "listenPort"));
+    e = firstErr(e, badNumber(root, "timeoutMs", "timeoutMs"));
+    e = firstErr(e, badString(root, "strategy", "strategy"));
+    e = firstErr(e, badString(root, "discoveryFile", "discoveryFile"));
+    e = firstErr(e, badString(root, "discoveryService", "discoveryService"));
+    if (json.has(root, "health")) {
+        let hv = json.get(root, "health");
+        e = firstErr(e, badBool(hv, "enabled", "health.enabled"));
+        e = firstErr(e, badString(hv, "path", "health.path"));
+        e = firstErr(e, badNumber(hv, "intervalMs", "health.intervalMs"));
+        e = firstErr(e, badNumber(hv, "timeoutMs", "health.timeoutMs"));
+        e = firstErr(e, badNumber(hv, "rise", "health.rise"));
+        e = firstErr(e, badNumber(hv, "fall", "health.fall"));
+    }
+    if (json.has(root, "backends")) {
+        let barr = json.get(root, "backends");
+        let bn = json.size(barr);
+        let bi = 0;
+        while (bi < bn) {
+            let be = json.at(barr, bi);
+            e = firstErr(e, badString(be, "host", `backend ${bi} host`));
+            e = firstErr(e, badNumber(be, "port", `backend ${bi} port`));
+            e = firstErr(e, badNumber(be, "weight", `backend ${bi} weight`));
+            bi = bi + 1;
+        }
+    }
+    c.loadError = e;
 
     c.listenHost = json.asString(json.get(root, "listenHost")) ?? c.listenHost;
     c.listenPort = (json.asNumber(json.get(root, "listenPort")) ?? (c.listenPort as long)) as int;
@@ -131,6 +199,7 @@ pub fn loadProxyConfig(path: string): ProxyConfig {
 // Return "" when valid, else a human-readable reason. Enforces: a listen port; a known LB strategy;
 // a backend source (either static backends or a discovery file); sane health-check bounds.
 pub fn validateProxy(c: ProxyConfig): string {
+    if (!string.eql(c.loadError, "")) { return c.loadError; }
     if (c.listenPort <= 0 || c.listenPort > 65535) { return `listenPort out of range: ${c.listenPort}`; }
     if (!knownStrategy(c.strategy)) { return `unknown strategy: ${c.strategy} (want roundrobin|weighted|leastconn|consistenthash)`; }
     if (c.backends.size() == 0 && string.eql(c.discoveryFile, "")) {
@@ -231,6 +300,8 @@ pub struct OrchConfig {
     // Path to the `service` (gateway) binary. When set, orchd launches + supervises a service process for
     // each handoff workload (on its rendezvous). "" = do not manage the service (deploy it out-of-band).
     pub servicePath: string,
+    // Set by loadOrchConfig when a present field has the wrong JSON type; validateOrch fails on it.
+    pub loadError: string,
     init() {
         self.manifestsDir = "manifests";
         self.reconcileMs = 2000;
@@ -241,6 +312,7 @@ pub struct OrchConfig {
         self.metricsFile = "";
         self.crashLoopRestarts = 5;
         self.servicePath = "";
+        self.loadError = "";
     }
 }
 
@@ -248,6 +320,30 @@ pub fn loadOrchConfig(path: string): OrchConfig {
     let c = OrchConfig();
     if (!file.File.exists(path)) { return c; }
     let root = json.parse(file.File.readText(path));
+
+    // Loud-fail on present-but-wrong-type fields; a truly ABSENT key keeps its default (extraction below).
+    let e = "";
+    e = firstErr(e, badString(root, "manifestsDir", "manifestsDir"));
+    e = firstErr(e, badNumber(root, "reconcileMs", "reconcileMs"));
+    e = firstErr(e, badString(root, "nodeId", "nodeId"));
+    e = firstErr(e, badString(root, "discoveryFile", "discoveryFile"));
+    e = firstErr(e, badString(root, "advertiseHost", "advertiseHost"));
+    e = firstErr(e, badString(root, "metricsFile", "metricsFile"));
+    e = firstErr(e, badNumber(root, "crashLoopRestarts", "crashLoopRestarts"));
+    e = firstErr(e, badString(root, "servicePath", "servicePath"));
+    if (json.has(root, "store")) {
+        let sv = json.get(root, "store");
+        e = firstErr(e, badBool(sv, "enabled", "store.enabled"));
+        e = firstErr(e, badString(sv, "addr", "store.addr"));
+        e = firstErr(e, badString(sv, "user", "store.user"));
+        e = firstErr(e, badString(sv, "password", "store.password"));
+        e = firstErr(e, badString(sv, "dbname", "store.dbname"));
+        e = firstErr(e, badBool(sv, "tls", "store.tls"));
+        e = firstErr(e, badBool(sv, "verify", "store.verify"));
+        e = firstErr(e, badString(sv, "caFile", "store.caFile"));
+    }
+    c.loadError = e;
+
     c.manifestsDir = json.asString(json.get(root, "manifestsDir")) ?? c.manifestsDir;
     c.reconcileMs = (json.asNumber(json.get(root, "reconcileMs")) ?? (c.reconcileMs as long)) as int;
     c.nodeId = json.asString(json.get(root, "nodeId")) ?? c.nodeId;
@@ -272,6 +368,7 @@ pub fn loadOrchConfig(path: string): OrchConfig {
 }
 
 pub fn validateOrch(c: OrchConfig): string {
+    if (!string.eql(c.loadError, "")) { return c.loadError; }
     if (string.eql(c.manifestsDir, "")) { return "manifestsDir must not be empty"; }
     if (c.reconcileMs <= 0) { return `reconcileMs must be > 0 (got ${c.reconcileMs})`; }
     if (string.eql(c.nodeId, "")) { return "nodeId must not be empty"; }

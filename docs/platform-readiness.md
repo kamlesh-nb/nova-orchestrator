@@ -34,16 +34,16 @@ consolidated plan at `../../../PLATFORM-PLAN.md`.
 
 | ID | Item | Master | Priority | Status |
 |----|------|--------|----------|--------|
-| T1-1 | Per-workload rolling update (surge/maxUnavailable) | C-T1-1 | P0 | not started |
-| T1-2 | Readiness gate before a replica takes traffic | C-T1-2 | P0 | not started |
-| T1-3 | Real timed graceful drain (drain-from-LB then kill) | C-T1-3 | P0 | not started |
-| T1-4 | Torn-free atomic discovery file write | C-T1-4 | P0 | not started |
-| T1-5 | Data-plane backpressure + lifecycle | C-T1-5 | P1 | not started |
-| C-Iso | Validate VETH/netns + cgroups on Linux; confirm fd-handoff on Win/macOS | C-Iso | P1 | not started |
-| T2-1 | Atomic live CAS (split-brain fix) | C-T2-1 | P2 | deferred |
-| T2-2 | Wire quorum gate into tryAcquire | C-T2-2 | P2 | deferred |
-| T2-3 | Promote live fencing test into a gate | C-T2-3 | P2 | deferred |
-| T3-* | Tier-3 polish (autoscaler metric, escaping, probe, streaming, VIP bind, config loud-fail) | POLISH | P3 | deferred |
+| T1-1 | Per-workload rolling update (surge/maxUnavailable) | C-T1-1 | P0 | done (`src/orch/nativelet.nova:328-349` Job roll state machine + `src/orch/supervisor.nova` setSpec/rollOne: one replica swapped per grace window, N-1 keep serving) |
+| T1-2 | Readiness gate before a replica takes traffic | C-T1-2 | P0 | done (`src/net/proxy.nova:222-230`: under health checks a new backend starts DRAINED and enters rotation only after `hcRise` consecutive OK probes) |
+| T1-3 | Real timed graceful drain (drain-from-LB then kill) | C-T1-3 | P0 | done (`src/orch/supervisor.nova:202-220` stopProc: SIGTERM, wall-clock deadline poll, SIGKILL on overrun; LB-remove-first folds into T1-1) |
+| T1-4 | Torn-free atomic discovery file write | C-T1-4 | P0 | done (`src/orch/nativelet.nova:35-39` atomicWriteText used at `:159`, and `src/net/service.nova:103-108`: temp file + atomic rename) |
+| T1-5 | Data-plane backpressure + lifecycle | C-T1-5 | P1 | not started (F-11: 64 KB ceiling, idle-fd leak, unbounded client coroutines, no graceful shutdown) |
+| C-Iso | Validate VETH/netns + cgroups on Linux; confirm fd-handoff on Win/macOS | C-Iso | P1 | in progress (degrade is now REPORTED, not silent: `src/orch/supervisor.nova:71-74` reportIsolationOnce logs "Limits are NOT applied" once and slice check 6 gates it; the LIVE VETH/netns + cgroups validation on a real Linux host, and the Windows fd-handoff port, are still outstanding) |
+| T2-1 | Atomic live CAS (split-brain fix) | C-T2-1 | P2 | done (`src/store/sqlconfig.nova:244-250` casBy: a single guarded `UPDATE ... WHERE k=? AND revision=?`, atomic RMW under the table exclusive lock, rows_affected = CAS verdict; create path checks rows_affected at `:236`) |
+| T2-2 | Wire quorum gate into tryAcquire | C-T2-2 | P2 | done (`src/orch/asynclease.nova:57-71` hasQuorum wired into tryAcquire: members configured => registered member + store-visible majority; none => single-orchd mode) |
+| T2-3 | Promote live fencing test into a gate | C-T2-3 | P2 | partial (logic gated OFFLINE: `tests/198_ha_cluster.nova` fencing + no-split-brain soak; `run-live-tests.sh` NovaDB paths fixed; the live CI gate itself is still outstanding, blocked on a running NovaDB in CI) |
+| T3-* | Tier-3 polish (autoscaler metric, escaping, probe, netns bound, VIP bind, config loud-fail, streaming) | POLISH | P3 | mostly done (VIP bind `src/net/proxy.nova:733` bindAddrFor; output escaping `src/orch/health.nova:112` promLabel, `src/orch/backup.nova:12` escapeField, `src/orch/controlplane.nova` htmlEscape; probe parse `src/orch/nativelet.nova:485-503`; netns bound `src/net/netns.nova:54-63`; config loud-fail `src/cfg/config.nova` badString/badNumber/badBool. Still open: autoscaler per-replica metric F-9, probeAndHeal backoff F-8, proxy >64 KB streaming F-11) |
 
 ## Tier 1: mandatory (the "pods like k8s" promise)
 
