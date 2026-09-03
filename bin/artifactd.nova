@@ -11,6 +11,7 @@ import web.app;
 import artifacts.blobstore;
 import artifacts.registry;
 import artifacts.service;
+import artifacts.cfgstore;
 import string;
 import env;
 
@@ -27,6 +28,10 @@ fn main(): void {
     let store = blobstore.BlobStore(root + "/blobs");
     let reg = registry.Registry(root + "/apps", store);
     let app = service.buildArtifactService(store, reg, token);
-    console.log(`artifactd: artifact origin on http://127.0.0.1:${port} root=${root} auth=${authState}`);
+    // Host the orchestrator config store here too: the tiny control-plane KV (specs, leader lease,
+    // membership) with an atomic CAS, snapshotted to <root>/config.snap. This is what replaced NovaDB.
+    let cfg = cfgstore.DurableConfigStore(root + "/config.snap");
+    cfgstore.mountConfigStore(app, cfg);
+    console.log(`artifactd: artifact origin + config store on http://127.0.0.1:${port} root=${root} auth=${authState}`);
     app.run(port);
 }

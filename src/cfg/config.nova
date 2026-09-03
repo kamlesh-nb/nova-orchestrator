@@ -228,57 +228,37 @@ pub fn knownStrategy(s: string): bool {
         || string.eql(s, "leastconn") || string.eql(s, "consistenthash");
 }
 
-// ---- orchd config store (O4): authenticated + optionally TLS-encrypted connection to btree ----
+// ---- orchd config store (O4): the artifactd-hosted config store over HTTP ----
 
-// How orchd's SqlConfigStore connects to BTreeDB. The credentials are threaded into the driver DSN so the
-// store authenticates as the orchestrator identity (the btree server enforces startup auth + per-object
-// RBAC), and `tls`/`verify`/`caFile` encrypt + optionally verify the client hop. Empty user => the driver
-// default; enabled=false => orchd runs without a config store (manifest-only reconcile).
+// How orchd's HttpConfigStore reaches the config store. The store now lives INSIDE artifactd (the deploy
+// blob origin), reached over its /cfg/* HTTP routes -- NovaDB has been removed from the stack. `addr` is
+// artifactd's host:port, `token` is the same deploy bearer token artifactd guards its routes with, and
+// `tls` selects https for the hop. Empty token => auth disabled (dev only). enabled=false => orchd runs
+// without a config store (manifest-only, single-node reconcile).
 pub struct StoreConfig {
     pub enabled: bool,
-    pub addr: string,        // host:port of the btree server
-    pub user: string,
-    pub password: string,
-    pub dbname: string,
-    pub tls: bool,           // encrypt the client hop
-    pub verify: bool,        // verify the server cert against caFile (tls=verify)
-    pub caFile: string,      // PEM CA bundle for verification
+    pub addr: string,        // host:port of the artifactd config store
+    pub token: string,       // deploy bearer token (guards artifactd's routes)
+    pub tls: bool,           // use https for the hop
     init() {
         self.enabled = false;
-        self.addr = "127.0.0.1:3009";
-        self.user = "";
-        self.password = "";
-        self.dbname = "";
+        self.addr = "127.0.0.1:8135";
+        self.token = "";
         self.tls = false;
-        self.verify = false;
-        self.caFile = "";
     }
 }
 
-// Build the novadb driver DSN carrying credentials + TLS options:
-//   novadb://[user[:password]@]host:port?db=..&tls=..&tlsCAFile=..
-// The driver's parse understands this exact shape; btConnect then sends the user/password in the
-// startup handshake (verified server-side) and, when tls is set, opens a TLS (optionally CA-verified) hop.
-pub fn storeConnectionString(s: StoreConfig): string {
-    let auth = "";
-    if (!string.eql(s.user, "")) {
-        if (!string.eql(s.password, "")) { auth = `${s.user}:${s.password}@`; }
-        else { auth = `${s.user}@`; }
-    }
-    let q = `?db=${s.dbname}`;
-    if (s.tls) {
-        let mode = if (s.verify) "verify" else "true";
-        q = `${q}&tls=${mode}`;
-        if (!string.eql(s.caFile, "")) { q = `${q}&tlsCAFile=${s.caFile}`; }
-    }
-    return `novadb://${auth}${s.addr}${q}`;
+// The base URL of the artifactd-hosted config store: http(s)://<addr>. HttpConfigStore appends the
+// /cfg/* paths. TLS selects the scheme; certificate verification for a verified hop is a follow-on
+// (getVerified) and out of scope for this move.
+pub fn storeBaseUrl(s: StoreConfig): string {
+    let scheme = if (s.tls) "https" else "http";
+    return `${scheme}://${s.addr}`;
 }
 
 pub fn validateStore(s: StoreConfig): string {
     if (!s.enabled) { return ""; }
     if (string.eql(s.addr, "")) { return "store.addr must not be empty when the store is enabled"; }
-    if (s.verify && string.eql(s.caFile, "")) { return "store.verify requires store.caFile"; }
-    if (s.verify && !s.tls) { return "store.verify requires store.tls"; }
     return "";
 }
 
@@ -335,12 +315,8 @@ pub fn loadOrchConfig(path: string): OrchConfig {
         let sv = json.get(root, "store");
         e = firstErr(e, badBool(sv, "enabled", "store.enabled"));
         e = firstErr(e, badString(sv, "addr", "store.addr"));
-        e = firstErr(e, badString(sv, "user", "store.user"));
-        e = firstErr(e, badString(sv, "password", "store.password"));
-        e = firstErr(e, badString(sv, "dbname", "store.dbname"));
+        e = firstErr(e, badString(sv, "token", "store.token"));
         e = firstErr(e, badBool(sv, "tls", "store.tls"));
-        e = firstErr(e, badBool(sv, "verify", "store.verify"));
-        e = firstErr(e, badString(sv, "caFile", "store.caFile"));
     }
     c.loadError = e;
 
@@ -357,12 +333,8 @@ pub fn loadOrchConfig(path: string): OrchConfig {
         let st = json.get(root, "store");
         c.store.enabled = json.asBool(json.get(st, "enabled")) ?? true;
         c.store.addr = json.asString(json.get(st, "addr")) ?? c.store.addr;
-        c.store.user = json.asString(json.get(st, "user")) ?? c.store.user;
-        c.store.password = json.asString(json.get(st, "password")) ?? c.store.password;
-        c.store.dbname = json.asString(json.get(st, "dbname")) ?? c.store.dbname;
+        c.store.token = json.asString(json.get(st, "token")) ?? c.store.token;
         c.store.tls = json.asBool(json.get(st, "tls")) ?? c.store.tls;
-        c.store.verify = json.asBool(json.get(st, "verify")) ?? c.store.verify;
-        c.store.caFile = json.asString(json.get(st, "caFile")) ?? c.store.caFile;
     }
     return c;
 }

@@ -39,11 +39,16 @@ struct Metadata {
 
 @serializable
 struct Workload {
-    pub binary: string,          // native executable to run per replica
+    pub binary: string,          // native executable to run per replica (a LOCAL path; used when artifact is empty)
+    // Content-addressed binary: "sha256:<hex>". When set, orchd pulls the binary by hash into its blob
+    // cache and runs the verified copy instead of `binary`. This is what the deploy action fills in, so
+    // the same manifest names the exact bytes to run. Empty = legacy local-path mode via `binary`.
+    pub artifact: string,
     pub args: List<string>,      // argv (excluding the binary and the injected port)
     pub restartPolicy: string,   // always | on-failure | never
     init() {
         self.binary = "";
+        self.artifact = "";
         self.args = List<string>();
         self.restartPolicy = "always";
     }
@@ -146,6 +151,9 @@ struct Manifest {
     pub network: Network,
     pub resources: Resources,
     pub routes: List<string>,
+    // NOTE: the app's own `config:` section is intentionally NOT modelled here. It is the application's
+    // configuration, read by the app itself from the manifest file via the framework loader (web.config).
+    // orchd does not parse or inject it, so serde simply ignores the `config:` key when binding a Manifest.
     init() {
         self.apiVersion = "nova/v1";
         self.kind = "App";
@@ -181,7 +189,9 @@ fn oneOf(v: string, a: string, b: string, c: string, d: string): bool {
 // acting on a nonsensical spec (empty name/binary, an inverted replica band, an unknown enum).
 pub fn validateManifest(m: Manifest): string {
     if (string.eql(m.metadata.name, "")) { return "metadata.name is required"; }
-    if (string.eql(m.workload.binary, "")) { return "workload.binary is required"; }
+    if (string.eql(m.workload.binary, "") && string.eql(m.workload.artifact, "")) {
+        return "workload needs either binary (a local path) or artifact (a sha256:<hex> to pull)";
+    }
     if (m.replicas.min < 1) { return "replicas.min must be >= 1"; }
     if (m.replicas.max < m.replicas.min) { return "replicas.max must be >= replicas.min"; }
     if (!oneOf(m.lb.strategy, "roundrobin", "weighted", "leastconn", "consistenthash")) {
@@ -213,7 +223,8 @@ pub fn toYaml(m: Manifest): string {
     out.push("metadata:");
     out.push(`  name: ${m.metadata.name}`);
     out.push("workload:");
-    out.push(`  binary: ${m.workload.binary}`);
+    if (!string.eql(m.workload.binary, "")) { out.push(`  binary: ${m.workload.binary}`); }
+    if (!string.eql(m.workload.artifact, "")) { out.push(`  artifact: ${m.workload.artifact}`); }
     out.push(`  restartPolicy: ${m.workload.restartPolicy}`);
     if (m.workload.args.size() > 0) {
         out.push("  args:");
@@ -275,6 +286,7 @@ pub fn toYaml(m: Manifest): string {
 // macOS/Windows, veth on Linux), so no host port is advertised.
 pub fn toSpec(m: Manifest): spec.Spec {
     let s = spec.Spec(m.metadata.name, m.workload.binary);
+    s.artifact = m.workload.artifact;      // content-addressed binary (orchd pulls by hash when set)
     let i = 0;
     while (i < m.workload.args.size()) { s.args.push(m.workload.args.get(i) ?? ""); i = i + 1; }
     s.restartPolicy = m.workload.restartPolicy;

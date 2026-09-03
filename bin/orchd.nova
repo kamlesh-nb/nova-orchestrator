@@ -11,8 +11,7 @@ import orch.nativelet;
 import orch.health;
 import orch.alerts;
 import orch.asynclease;
-import store.sqlconfig;
-import novadb;
+import store.httpconfig;
 import net.aio;
 import cfg.config;
 import io.file;
@@ -56,19 +55,18 @@ async fn runAll(n: nativelet.Nativelet, c: config.OrchConfig): int {
 // stamps updated_at from; ms keeps the lease TTL arithmetic in the units the lease compares in.
 fn nowMs(): long { return datetime.nowNs() / 1000000; }
 
-// The HA control loop (store-backed). Runs when `store.enabled`: connect to NovaDB eagerly at the top
-// (an async connect resolved lazily inside the loop would hit the nested-block-drive guard), build the
-// SqlConfigStore + lease, then each tick refresh/take leadership and -- ONLY as the valid leader --
-// reconcile the nativelet from the store's `workloads/` prefix. A standby, a fenced old leader, or a
-// node that has lost the store reconciles nothing (haReconcileTick returns false and, when the store is
-// unreachable, degrades to storeReachable=false). Discovery + probes still run every tick regardless of
-// role so a standby keeps its already-running replicas healthy. Metrics, when enabled, publish the HA
-// health report (role + storeReachable) rather than the standalone one.
+// The HA control loop (store-backed). Runs when `store.enabled`: point the HttpConfigStore at artifactd
+// (the config store now lives there -- NovaDB is gone), build the store + lease, then each tick
+// refresh/take leadership and -- ONLY as the valid leader -- reconcile the nativelet from the store's
+// `workloads/` prefix. A standby, a fenced old leader, or a node that has lost the store reconciles
+// nothing (haReconcileTick returns false and, when the store is unreachable, degrades to
+// storeReachable=false). Discovery + probes still run every tick regardless of role so a standby keeps
+// its already-running replicas healthy. Metrics, when enabled, publish the HA health report (role +
+// storeReachable) rather than the standalone one.
 async fn haRun(n: nativelet.Nativelet, c: config.OrchConfig): int {
-    let dsn = config.storeConnectionString(c.store);
-    console.log(`orchd: HA mode, connecting to config store ${c.store.addr} db=${c.store.dbname}`);
-    let conn = await novadb.NovaDriver().connect(dsn);
-    let store = sqlconfig.SqlConfigStore(conn);
+    let base = config.storeBaseUrl(c.store);
+    console.log(`orchd: HA mode, config store at ${base}`);
+    let store = httpconfig.HttpConfigStore(base, c.store.token);
     let _s = await store.ensureSchema();
     // TTL is a few reconcile periods so a single slow tick does not drop leadership; floor at 15s.
     let ttl = (c.reconcileMs * 5) as long;

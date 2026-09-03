@@ -15,10 +15,8 @@
 import assert;
 import bytes;
 import string;
-import db;
-import novadb;
 import net.poller;
-import store.sqlconfig;
+import store.httpconfig;
 import store.config;
 import orch.asynclease;
 import orch.nativelet;
@@ -28,12 +26,9 @@ fn specJson(name: string, reps: int): string {
 }
 
 async fn runLive(donePtr: long): void {
-    let driver = novadb.NovaDriver();
-    // Two nodes: independent connections + stores + nativelets over the same btree.
-    let connA = await driver.connect("127.0.0.1:3009");
-    let connB = await driver.connect("127.0.0.1:3009");
-    let sA = sqlconfig.SqlConfigStore(connA);
-    let sB = sqlconfig.SqlConfigStore(connB);
+    // Two nodes: independent clients + nativelets pointed at the SAME artifactd config store.
+    let sA = httpconfig.HttpConfigStore("http://127.0.0.1:8135", "");
+    let sB = httpconfig.HttpConfigStore("http://127.0.0.1:8135", "");
     await sA.ensureSchema();
 
     let nA = nativelet.Nativelet("unused-dir");

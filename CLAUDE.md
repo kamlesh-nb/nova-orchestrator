@@ -2,7 +2,8 @@
 
 A container-free, Kubernetes-style orchestration stack written in **Nova**: a control plane that
 supervises workloads (native processes, not containers) with rolling updates, readiness gates,
-service discovery, autoscaling, and an HA config store on NovaDB.
+service discovery, autoscaling, and an HA config store hosted by artifactd (no separate database; NovaDB
+was removed from the control plane 2026-09-03, see `src/store/httpconfig.nova` + `src/artifacts/cfgstore.nova`).
 
 ## Binaries (`bin/`)
 
@@ -12,7 +13,8 @@ service discovery, autoscaling, and an HA config store on NovaDB.
   load-balances to replicas. Two modes: normal L7 proxy (parses HTTP, forwards) and the **fd-handoff**
   mode (out-of-path L4 — see below).
 - **`orchctl`** — offline CLI (inspect/apply/scale).
-- **`artifactd`** — content-addressed artifact daemon (blob store + registry).
+- **`artifactd`** — content-addressed artifact daemon (blob store + registry) AND the orchestrator's
+  config-store host (`/cfg/*` routes, snapshotted to `<root>/config.snap`).
 
 ## Build / run / test
 
@@ -27,7 +29,8 @@ nova build --release            # builds bin/*.nova (reads project.json)
   `netns.nova`.
 - `src/orch/` — `manifest.nova`, `supervisor.nova`, `rollout.nova`, `lease.nova`/`asynclease.nova`
   (HA leader lease), `health.nova`, `spec.nova`, `membership.nova`, `autoscaler.nova`, `isolation.nova`.
-- `src/store/` — the config store (`config.nova`, `sqlconfig.nova` on NovaDB).
+- `src/store/` — the config store: `config.nova` (in-memory core + CAS), `wire.nova` (HTTP codec),
+  `httpconfig.nova` (async client over artifactd's `/cfg/*`). artifactd hosts it via `src/artifacts/cfgstore.nova`.
 - `src/artifacts/` — blob store + registry. `docs/` — design + `platform-readiness.md` (the roadmap).
 
 ## The fd-handoff data plane — and the Windows alternative (READ before touching handoff)

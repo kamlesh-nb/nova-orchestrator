@@ -7,7 +7,6 @@
 // fills it from the lease + nativelet + a replication-lag read-out via buildHealth/timedReconcile below.
 
 import store.config;
-import store.sqlconfig;
 import orch.nativelet;
 import orch.asynclease;
 import string;

@@ -9,6 +9,11 @@ import serde.json;
 import list;
 import string;
 
+// NOTE: the app's own configuration is NOT part of the Spec. It lives in the manifest's `config:`
+// section and is read by the application itself (via the framework loader web.config) straight from the
+// manifest file -- never injected as environment variables (which collide across co-located apps). The
+// orchestrator only runs the process; it does not carry or inject app config.
+
 pub struct Spec {
     pub name: string,           // unique workload key
     pub binaryPath: string,     // native executable to exec (a LOCAL path; resolved from `artifact` when set)

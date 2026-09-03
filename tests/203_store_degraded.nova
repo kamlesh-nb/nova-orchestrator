@@ -1,40 +1,24 @@
-// Store-failure degradation (Orch robustness #1). When NovaDB is unreachable, the novadb driver now
-// stamps SQLSTATE 08006 on the dead round-trip, so SqlConfigStore can tell "store down" from "no rows"
-// and the HA lease degrades safely instead of silently pretending the lease is free / there are no
-// members. This test drives a Connection that always fails with 08006 and asserts the whole chain:
+// Store-failure degradation (Orch robustness #1), now over the artifactd-hosted HttpConfigStore (NovaDB
+// removed). When the config store is unreachable, HttpConfigStore's round-trip comes back as a transport
+// failure (a synthetic 5xx from the HTTP client on a refused connection), so `reachable` goes false and
+// the HA lease degrades safely instead of pretending the lease is free / there are no members. This test
+// points the store at a closed port (no server needed -- the connection is refused deterministically) and
+// asserts the whole chain:
 //   - store.ping()/reachable report false,
 //   - the lease cannot falsely acquire (no split-brain from a dead store),
 //   - a reconcile tick steps down and does not converge, and
 //   - the health report is not-ready / not-healthy.
 import assert;
-import db;
-import list;
 import string;
-import store.sqlconfig;
+import store.httpconfig;
 import orch.asynclease;
 import orch.nativelet;
 import orch.health;
 
-// A Connection whose every round-trip fails as if the server is unreachable: SQLSTATE 08006, exactly
-// what the novadb driver returns on a send failure or a response that ends before ReadyForQuery.
-struct DeadConn impl Connection {
-    init() {}
-    fn err(self: DeadConn): DbError { return db.DbError("08006", "connection to NovaDB lost"); }
-    pub async fn exec(self: DeadConn, sql: string, params: List<DbValue>): ExecResult { return db.errorExec(self.err()); }
-    pub async fn query(self: DeadConn, sql: string, params: List<DbValue>): ResultSet { return db.errorResult(self.err()); }
-    pub fn close(self: DeadConn): void {}
-    pub fn setTimeout(self: DeadConn, ms: int): int { return 0; }
-    pub async fn prepare(self: DeadConn, sql: string): int { return 0; }
-    pub async fn queryPrepared(self: DeadConn, stmt: int, params: List<DbValue>): ResultSet { return db.errorResult(self.err()); }
-    pub async fn execPrepared(self: DeadConn, stmt: int, params: List<DbValue>): ExecResult { return db.errorExec(self.err()); }
-    pub async fn queryWire(self: DeadConn, sql: string, params: List<DbValue>): WireRows { return db.wireRowsFromResultSet(db.errorResult(self.err())); }
-    pub async fn begin(self: DeadConn): ExecResult { return db.errorExec(self.err()); }
-    pub async fn commit(self: DeadConn): ExecResult { return db.errorExec(self.err()); }
-    pub async fn rollback(self: DeadConn): ExecResult { return db.errorExec(self.err()); }
-}
-
-fn deadStore(): sqlconfig.SqlConfigStore {
-    return sqlconfig.SqlConfigStore(DeadConn());
+// A store pointed at a closed port: every round-trip is refused, exactly what a down artifactd looks
+// like. 65533 is chosen to be unused; connecting to it returns ECONNREFUSED immediately (offline, fast).
+fn deadStore(): httpconfig.HttpConfigStore {
+    return httpconfig.HttpConfigStore("http://127.0.0.1:65533", "");
 }
 
 @test
@@ -51,8 +35,8 @@ fn test_store_ping_reports_unreachable(): void {
 @test
 fn test_dead_store_cannot_falsely_acquire(): void {
     // The core safety property: a node that cannot reach the store must NOT become leader, else two
-    // partitioned nodes could both "win". The create-only CAS fails (INSERT affects 0 rows on a dead
-    // conn), and the reachability gate on hasQuorum refuses too.
+    // partitioned nodes could both "win". The create-only CAS fails (unreachable), and the reachability
+    // gate on hasQuorum refuses too.
     let lease = asynclease.AsyncLeaderLease(deadStore(), "node-1", "leases/leader", 5000);
     let acquired = lease.tryAcquire(1000);
     assert.isTrue(!acquired);

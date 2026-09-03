@@ -1,31 +1,26 @@
-// 189 (LIVE) -- the leader lease + FENCING EPOCH over a REAL BTreeDB, driving TWO orchestrator nodes
-// (P3 live path). Each node holds its own SqlConfigStore (its own btree connection) over the SAME btree,
-// and they contend for one lease row via the store's compare-and-set. NOT part of the offline suite (it
-// lives under tests/live/). Run with a fresh btree server on 127.0.0.1:3009 (see run-live-tests.sh):
+// 189 (LIVE) -- the leader lease + FENCING EPOCH over a REAL artifactd config store, driving TWO
+// orchestrator nodes (HA live path). Each node holds its own HttpConfigStore pointed at the SAME
+// artifactd, and they contend for one lease row via the store's compare-and-set. NOT part of the offline
+// suite (it lives under tests/live/). Run with a fresh artifactd on 127.0.0.1:8135 (see run-live-tests.sh):
 //
 //   ./run-live-tests.sh
 //
-// Proves the P3 gate against real persistence: A leads (epoch 1); A partitions; B promotes by taking the
+// Proves the HA gate against real persistence: A leads (epoch 1); A partitions; B promotes by taking the
 // expired lease (epoch 2); the unpaused old A is FENCED (its stale-epoch renew is rejected). Safety rests
 // on the epoch (CAS = one winner per epoch), not clocks. The reactor is pumped manually (conformance 205
-// pattern) because the driver's async I/O needs a running loop; the clock is mocked (nowMs passed in) so
+// pattern) because the coroutine harness needs a running loop; the clock is mocked (nowMs passed in) so
 // the scenario is deterministic.
 import assert;
 import bytes;
-import db;
-import novadb;
 import net.poller;
-import store.sqlconfig;
+import store.httpconfig;
 import orch.asynclease;
 
 async fn runLive(donePtr: long): void {
-    let driver = novadb.NovaDriver();
-    // Two nodes, two independent connections to the same btree.
-    let connA = await driver.connect("127.0.0.1:3009");
-    let connB = await driver.connect("127.0.0.1:3009");
-    let sA = sqlconfig.SqlConfigStore(connA);
-    let sB = sqlconfig.SqlConfigStore(connB);
-    await sA.ensureSchema();   // one shared config + config_meta
+    // Two nodes, two independent clients pointed at the SAME artifactd config store.
+    let sA = httpconfig.HttpConfigStore("http://127.0.0.1:8135", "");
+    let sB = httpconfig.HttpConfigStore("http://127.0.0.1:8135", "");
+    await sA.ensureSchema();   // no-op ping (artifactd self-initialises)
 
     let a = asynclease.AsyncLeaderLease(sA, "nodeA", "leases/leader", 1000);
     let b = asynclease.AsyncLeaderLease(sB, "nodeB", "leases/leader", 1000);

@@ -81,6 +81,18 @@ pub class ConfigStore {
         return self.rev;
     }
 
+    // --- restore hooks (durable snapshot reload, artifacts/cfgstore.nova) --------------------------
+    // These let a durable wrapper reload a persisted snapshot WITHOUT going through put()/cas(), which
+    // would re-number revisions and break watch(sinceRevision) continuity across a restart. They append
+    // an entry verbatim and set the global revision to the persisted high-water. Used only on load, from
+    // a single writer; not part of the reconcile/lease data path.
+    pub fn restoreEntry(self: ConfigStore, e: ConfigEntry): void {
+        self.entries.push(e);
+    }
+    pub fn setRevision(self: ConfigStore, r: long): void {
+        self.rev = r;
+    }
+
     // Unconditional write by an unnamed actor (the deterministic oracle default; audit fields stay empty).
     pub fn put(self: ConfigStore, key: string, value: string): long {
         return self.putBy(key, value, "system", 0);

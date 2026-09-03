@@ -125,37 +125,25 @@ fn test_orch_load_from_json(): void {
     assert.equalStr(config.validateOrch(c), "");
 }
 
-// ---- O4: config-store connection carries credentials (+ TLS) ----
+// ---- O4: config-store base URL (artifactd-hosted; NovaDB removed) ----
 
 @test
-fn test_store_dsn_carries_credentials(): void {
+fn test_store_base_url_http(): void {
     let s = config.StoreConfig();
     s.enabled = true;
-    s.addr = "10.0.0.9:3009";
-    s.user = "orchestrator";
-    s.password = "s3cret";
-    s.dbname = "orchdb";
-    let connectionString = config.storeConnectionString(s);
-    // user:password@ prefix + host:port + db param.
-    assert.isTrue(string.contains(connectionString, "orchestrator:s3cret@10.0.0.9:3009"));
-    assert.isTrue(string.contains(connectionString, "db=orchdb"));
-    assert.isFalse(string.contains(connectionString, "tls="));   // TLS off -> no tls param
+    s.addr = "10.0.0.9:8135";
+    let base = config.storeBaseUrl(s);
+    assert.equalStr(base, "http://10.0.0.9:8135");   // TLS off -> http scheme
 }
 
 @test
-fn test_store_dsn_with_tls_verify(): void {
+fn test_store_base_url_https(): void {
     let s = config.StoreConfig();
     s.enabled = true;
-    s.addr = "db.internal:3009";
-    s.user = "orch";
-    s.password = "";                 // user with no password -> `user@`
+    s.addr = "artifactd.internal:8135";
     s.tls = true;
-    s.verify = true;
-    s.caFile = "/etc/nova/ca.pem";
-    let connectionString = config.storeConnectionString(s);
-    assert.isTrue(string.contains(connectionString, "orch@db.internal:3009"));
-    assert.isTrue(string.contains(connectionString, "tls=verify"));
-    assert.isTrue(string.contains(connectionString, "tlsCAFile=/etc/nova/ca.pem"));
+    let base = config.storeBaseUrl(s);
+    assert.equalStr(base, "https://artifactd.internal:8135");   // TLS on -> https scheme
 }
 
 @test
@@ -163,10 +151,9 @@ fn test_store_validation(): void {
     let s = config.StoreConfig();               // disabled -> always valid
     assert.equalStr(config.validateStore(s), "");
     s.enabled = true;
-    s.verify = true;                            // verify without tls / caFile -> invalid
+    s.addr = "";                                // enabled but no addr -> invalid
     assert.isFalse(string.eql(config.validateStore(s), ""));
-    s.tls = true;
-    s.caFile = "/etc/ca.pem";
+    s.addr = "127.0.0.1:8135";
     assert.equalStr(config.validateStore(s), "");
 }
 
@@ -174,14 +161,13 @@ fn test_store_validation(): void {
 fn test_orch_load_store_section(): void {
     let path = "/tmp/nova_orch_test_orchd_store.json";
     file.File.writeText(path,
-        "{\"nodeId\":\"n1\",\"store\":{\"enabled\":true,\"addr\":\"127.0.0.1:3009\","
-        + "\"user\":\"orch\",\"password\":\"pw\",\"dbname\":\"cfg\",\"tls\":true}}");
+        "{\"nodeId\":\"n1\",\"store\":{\"enabled\":true,\"addr\":\"127.0.0.1:8135\","
+        + "\"token\":\"deploytok\",\"tls\":true}}");
     let c = config.loadOrchConfig(path);
     assert.isTrue(c.store.enabled);
-    assert.equalStr(c.store.user, "orch");
+    assert.equalStr(c.store.token, "deploytok");
     assert.isTrue(c.store.tls);
     assert.equalStr(config.validateOrch(c), "");
-    let connectionString = config.storeConnectionString(c.store);
-    assert.isTrue(string.contains(connectionString, "orch:pw@127.0.0.1:3009"));
-    assert.isTrue(string.contains(connectionString, "tls=true"));
+    let base = config.storeBaseUrl(c.store);
+    assert.equalStr(base, "https://127.0.0.1:8135");
 }

@@ -8,14 +8,14 @@
 // clocks; time is only for liveness. See lease.nova for the full rationale.
 
 import store.config;
-import store.sqlconfig;
+import store.httpconfig;
 import orch.lease;
 import orch.nativelet;
 import string;
 import list;
 
 pub struct AsyncLeaderLease {
-    pub store: sqlconfig.SqlConfigStore,
+    pub store: httpconfig.HttpConfigStore,
     pub nodeId: string,
     pub key: string,
     pub ttlMs: long,
@@ -23,7 +23,7 @@ pub struct AsyncLeaderLease {
     pub isLeader: bool,
     pub storeReachable: bool, // reachability observed on the last reconcile tick (for /readyz)
 
-    init(store: sqlconfig.SqlConfigStore, nodeId: string, key: string, ttlMs: long) {
+    init(store: httpconfig.HttpConfigStore, nodeId: string, key: string, ttlMs: long) {
         self.store = store;
         self.nodeId = nodeId;
         self.key = key;
