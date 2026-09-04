@@ -55,28 +55,6 @@ fn test_scan_reads_yaml_and_json(): void {
     let n = nativelet.Nativelet(dirPath);
     let ms = n.scan();
 
-    // [DBG200] TEMPORARY diagnostic for the Linux-only failure: show the raw directory listing and the
-    // scan keys so CI reveals whether dir.entries() came back empty on Linux. Remove once fixed.
-    console.log("[DBG200] dirExists=" + (if (dir.Dir.exists(dirPath)) "y" else "n"));
-    let dbgDir = dir.Dir.open(dirPath);
-    let dbgEnt = dbgDir.entries();
-    dbgDir.close();
-    console.log("[DBG200] listing begin");
-    let dbgi = 0;
-    while (dbgi < dbgEnt.size()) {
-        console.log("[DBG200]   ent=[" + (dbgEnt.get(dbgi) ?? "?") + "]");
-        dbgi = dbgi + 1;
-    }
-    console.log("[DBG200] listing end");
-    console.log("[DBG200] scan keys begin");
-    let dbgj = 0;
-    while (dbgj < ms.size()) {
-        let dbge = ms.get(dbgj) ?? nativelet.ScanEntry("", spec.Spec("", ""), false);
-        console.log("[DBG200]   key=[" + dbge.key + "]");
-        dbgj = dbgj + 1;
-    }
-    console.log("[DBG200] scan keys end");
-
     // The YAML app lowered correctly.
     let shop = manifestByKey(ms, "shop");
     assert.equalStr(shop.key, "shop");
