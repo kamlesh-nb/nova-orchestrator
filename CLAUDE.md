@@ -18,10 +18,66 @@ was removed from the control plane 2026-09-03, see `src/store/httpconfig.nova` +
 
 ## Build / run / test
 
+**Unix (macOS / Linux / WSL2):**
 ```bash
-nova build --release            # builds bin/*.nova (reads project.json)
+./build.sh --release            # builds bin/*.nova (service/orchd/orchctl/artifactd) into build/release/bin
 ./run-tests.sh                  # runs every tests/*.nova via `nova test`
 ```
+
+**Windows (PowerShell):**
+```powershell
+.\run-tests.ps1                 # PowerShell mirror of run-tests.sh (optional -Filter <substr>)
+# building the binaries: `build.sh` is bash, so run it under Git Bash / WSL, or compile a single
+# entrypoint directly, e.g.  nova bin/service.nova -o build\release\bin\service.exe --release
+```
+
+Both test runners must find **`nova(.exe)` on PATH** and run from a checkout laid out beside the `lang`
+toolchain (the resolver finds this package via `../packages`, and the stdlib resolves relative to the
+`lang/` CWD, which the scripts `cd` into). `nova` must be a **ReleaseFast** build: a Debug nova's leak
+gate exits 1 on every `nova test`, so the suite would report red while printing "0 failed"
+(`zig build -Doptimize=ReleaseFast` in `lang/`).
+
+**Windows caveat:** the orchestrator is a Linux production concern. Its POSIX-only surfaces do NOT pass
+on Windows: the fd-handoff data plane (AF_UNIX / `SCM_RIGHTS`, see below) and some reactor/isolation
+tests (e.g. `183_isolation_sandbox`, `202_live_forwarding`). Use **WSL2** for a full green run; on
+Windows `run-tests.ps1` covers the platform-neutral logic tests only.
+
+## End-to-end smoke test on WSL2 (orchestrator + a real web app)
+
+The data plane's fd-handoff (AF_UNIX / `SCM_RIGHTS`) is POSIX-only, so the real end-to-end check runs on
+Linux: use **WSL2**, not native Windows. Run everything from a checkout laid out beside the `lang`
+toolchain, with a ReleaseFast `nova` on PATH.
+
+**Fastest -- the ready-made loop.** `lang/docs/guide/examples/run-live.sh` builds a NovaDB-backed web app,
+starts two replicas (`NOVA_PORT` 8080/8081), puts them behind `service` (the gateway), curls the front
+port to show round-robin, and drives `orchctl` over an offline config-store dump:
+```bash
+( cd ../../lang && zig build -Doptimize=ReleaseFast )   # installs nova to ~/.nova/bin
+export PATH="$HOME/.nova/bin:$PATH"
+cd ../../lang/docs/guide/examples && ./run-live.sh      # also needs zig (builds the NovaDB server) + curl
+```
+Green output (a create via :8080, a read-back from NovaDB, three round-robined GETs through :8090) means
+the app + data-plane path work.
+
+**Fuller -- orchd supervising a web app from a manifest** (exercises the control plane + config store):
+1. Build the orchestrator binaries: `./build.sh --release` → `build/release/bin/{service,orchd,orchctl,artifactd}`.
+2. Scaffold + build a web app: `nova init web --name shopweb && ( cd shopweb && nova build --release )`.
+   The app honours `--port N` / `NOVA_PORT`, so orchd can run several replicas on one host.
+3. Start `artifactd` (config store + blob origin) on :8135:
+   `NOVA_ARTIFACT_ROOT=./artifacts NOVA_PORT=8135 build/release/bin/artifactd &`.
+4. Write an `orchd.json` (points its `store` at artifactd `127.0.0.1:8135`, a `manifestsDir`, and a
+   `discoveryFile`) and a `manifests/shopweb.yaml` (`workload.binary` → the built app, `replicas`,
+   `lb.handoff: true`, `network.expose: gateway-only` + `servicePort`, `routes`). The exact field shapes
+   are the templates `deploy/linux/install.sh` seeds and the manifest in `examples/manifests/shop.yaml`;
+   the full schema is `lang/docs/guide/23-deploying-with-the-orchestrator.md`. Then run
+   `build/release/bin/orchd orchd.json &` -- it reconciles the replicas and writes the discovery file.
+5. Start `service` reading that discovery file and `curl` the front `servicePort`; requests are served by
+   a replica over the fd-handoff path (the socket rendezvous is the short `/tmp/nova-shopweb.sock`).
+
+Config-store state can be inspected offline with `orchctl inspect <dump>` (see the yt walkthrough
+`lang/docs/guide/yt/23-deploying-with-the-orchestrator.md`). If any of this misbehaves, that is exactly
+the integration the 4 Linux-only `ci.yml` failures point at -- capture the output (add
+`NOVA_CRASH_TRACE=1` for the crash in `202_live_forwarding`) so it can be fixed with real evidence.
 
 ## Layout
 
