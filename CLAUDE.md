@@ -18,10 +18,29 @@ was removed from the control plane 2026-09-03, see `src/store/httpconfig.nova` +
 
 ## Build / run / test
 
+**Unix (macOS / Linux / WSL2):**
 ```bash
-nova build --release            # builds bin/*.nova (reads project.json)
+./build.sh --release            # builds bin/*.nova (service/orchd/orchctl/artifactd) into build/release/bin
 ./run-tests.sh                  # runs every tests/*.nova via `nova test`
 ```
+
+**Windows (PowerShell):**
+```powershell
+.\run-tests.ps1                 # PowerShell mirror of run-tests.sh (optional -Filter <substr>)
+# building the binaries: `build.sh` is bash, so run it under Git Bash / WSL, or compile a single
+# entrypoint directly, e.g.  nova bin/service.nova -o build\release\bin\service.exe --release
+```
+
+Both test runners must find **`nova(.exe)` on PATH** and run from a checkout laid out beside the `lang`
+toolchain (the resolver finds this package via `../packages`, and the stdlib resolves relative to the
+`lang/` CWD, which the scripts `cd` into). `nova` must be a **ReleaseFast** build: a Debug nova's leak
+gate exits 1 on every `nova test`, so the suite would report red while printing "0 failed"
+(`zig build -Doptimize=ReleaseFast` in `lang/`).
+
+**Windows caveat:** the orchestrator is a Linux production concern. Its POSIX-only surfaces do NOT pass
+on Windows: the fd-handoff data plane (AF_UNIX / `SCM_RIGHTS`, see below) and some reactor/isolation
+tests (e.g. `183_isolation_sandbox`, `202_live_forwarding`). Use **WSL2** for a full green run; on
+Windows `run-tests.ps1` covers the platform-neutral logic tests only.
 
 ## Layout
 
