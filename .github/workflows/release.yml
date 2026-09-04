@@ -1,7 +1,7 @@
 name: release
 
 # Build the orchestrator stack (service / orchd / orchctl / artifactd, + orchweb best-effort) and publish
-# it to a GitHub Release. Targets: Linux {x86_64, arm64} and macOS arm64.
+# it to a GitHub Release. Targets: Linux {x86_64, arm64}.
 #
 # Modelled on the lang toolchain's release workflow: each bundle is built NATIVELY on a runner of that
 # arch. We do NOT cross-compile (`build.sh --target` aborts when cross-building the C++ runtime on the
@@ -10,8 +10,10 @@ name: release
 # The orchestrator is NOVA code, so each runner builds the lang toolchain (with LLVM) first, then runs
 # `build.sh --release` for its own host arch.
 #
-# macOS Intel and Windows are NOT shipped: the orchestrator is a Linux/POSIX production concern (its
-# fd-handoff data plane is AF_UNIX/SCM_RIGHTS), and there is no Windows runtime story. See CLAUDE.md.
+# LINUX ONLY -- same scope as ci.yml. The orchestrator is a Linux/POSIX production concern (its
+# fd-handoff data plane is AF_UNIX/SCM_RIGHTS); macOS/Windows are development hosts, not ship targets.
+# (A macOS-arm64 leg was tried and aborted at build with exit 134; not chased since macOS is out of the
+# orchestrator's production scope. See CLAUDE.md.)
 #
 # TRIGGER: tag `v*` (or run manually). The tag must be on a branch that carries THIS workflow + build.sh.
 #
@@ -45,7 +47,6 @@ jobs:
         include:
           - { runner: ubuntu-latest,    os: linux, arch: x86_64 }
           - { runner: ubuntu-24.04-arm, os: linux, arch: arm64 }
-          - { runner: macos-14,         os: macos, arch: arm64 }
     steps:
       - uses: actions/checkout@v4
         with: { path: packages/nova-orchestrator }
