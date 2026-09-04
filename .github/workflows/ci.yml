@@ -150,3 +150,26 @@ jobs:
           fi
           sudo find /tmp -maxdepth 1 -user root -name 'nova*' -exec rm -rf {} + 2>/dev/null || true
           exit "$rc"
+
+      # Build the RELEASE binaries and archive them as downloadable artifacts. Runs only after the build
+      # + tests above pass (a failing earlier step aborts the job), so every green CI run on each Linux
+      # arch publishes a `nova-orchestrator-<arch>` bundle. The tag-triggered release.yml still owns the
+      # full cross-arch + macOS/windows GitHub Release; this makes the current Linux binaries grabbable
+      # from any CI run without cutting a release.
+      - name: Build + archive release binaries
+        working-directory: packages/nova-orchestrator
+        run: |
+          export PATH="$HOME/.nova/bin:$PATH"
+          ./build.sh --release
+          mkdir -p out
+          base="nova-orchestrator-${{ matrix.name }}"
+          if [ ! -d build/release/bin ]; then echo "no build/release/bin"; exit 1; fi
+          tar -C build/release/bin -czf "out/${base}.tar.gz" .
+          ( cd out && sha256sum "${base}.tar.gz" > "${base}.tar.gz.sha256" )
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nova-orchestrator-${{ matrix.name }}
+          path: |
+            packages/nova-orchestrator/out/*.tar.gz
+            packages/nova-orchestrator/out/*.tar.gz.sha256
