@@ -1,0 +1,29 @@
+[Unit]
+Description=Nova artifactd (content-addressed blob store + orchestrator config store)
+Documentation=https://github.com/kamlesh-nb/nova-orchestrator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nova
+Group=nova
+# artifactd is env-configured: NOVA_ARTIFACT_ROOT (blobs + config.snap live here), NOVA_PORT (default
+# 8135), NOVA_ARTIFACT_TOKEN (deploy bearer token; empty = auth OFF, dev only). Put the token in the
+# EnvironmentFile below (mode 0640, root:nova) so it is not world-readable in the unit.
+Environment=NOVA_ARTIFACT_ROOT=/var/lib/nova-orchestrator/artifacts
+Environment=NOVA_PORT=8135
+EnvironmentFile=-/etc/nova-orchestrator/artifactd.env
+ExecStart=/opt/nova-orchestrator/bin/artifactd
+WorkingDirectory=/var/lib/nova-orchestrator
+Restart=on-failure
+RestartSec=2
+# Opt-in hardening (uncomment once you have confirmed it does not block your storage path):
+# NoNewPrivileges=true
+# ProtectSystem=strict
+# ProtectHome=true
+# ReadWritePaths=/var/lib/nova-orchestrator
+# PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

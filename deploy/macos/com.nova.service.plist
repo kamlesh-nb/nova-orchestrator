@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd daemon for Nova service (data-plane gateway). install.sh substitutes the @...@ tokens.
+     In fd-handoff mode the replicas reach an AF_UNIX rendezvous at /tmp/nova-service.sock (override with
+     NOVA_HANDOFF_SOCK); keep that path short (sun_path caps ~104 bytes on macOS). -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nova.service</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@BIN_DIR@/service</string>
+        <string>@CONF_DIR@/service.json</string>
+    </array>
+    <key>WorkingDirectory</key><string>@DATA_DIR@</string>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>@LOG_DIR@/service.log</string>
+    <key>StandardErrorPath</key><string>@LOG_DIR@/service.log</string>
+</dict>
+</plist>

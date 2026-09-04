@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd daemon for Nova artifactd. install.sh substitutes @BIN_DIR@/@DATA_DIR@/@LOG_DIR@. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nova.artifactd</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@BIN_DIR@/artifactd</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NOVA_ARTIFACT_ROOT</key><string>@DATA_DIR@/artifacts</string>
+        <key>NOVA_PORT</key><string>8135</string>
+        <!-- Set the deploy token here (empty = auth OFF, dev only): -->
+        <key>NOVA_ARTIFACT_TOKEN</key><string></string>
+    </dict>
+    <key>WorkingDirectory</key><string>@DATA_DIR@</string>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>@LOG_DIR@/artifactd.log</string>
+    <key>StandardErrorPath</key><string>@LOG_DIR@/artifactd.log</string>
+</dict>
+</plist>
