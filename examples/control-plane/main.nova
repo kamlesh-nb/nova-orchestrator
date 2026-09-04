@@ -6,7 +6,6 @@
 // Datastar SSE frames (built via a BufferSink) that patch the apps table in place.
 import web.app;
 import web.mediator;
-import web.di;
 import web.routing;
 import web.response;
 import orch.controlplane;
