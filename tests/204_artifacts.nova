@@ -173,6 +173,17 @@ fn test_registry_bind_resolve_versions_and_promote(): void {
     assert.equalStr(reg.promote("shop", "1.0.0"), "");               // roll back
     assert.equalStr(reg.current("shop") ?? "", "1.0.0");
 
+    // [DBG204] TEMPORARY diagnostic for the Linux-only failure: resolve/current above pass (files are
+    // written + read), so if this list is empty it isolates the bug to the directory LISTING on Linux.
+    let dbgVers = reg.versions("shop");
+    console.log("[DBG204] versions begin");
+    let dbgk = 0;
+    while (dbgk < dbgVers.size()) {
+        console.log("[DBG204]   ver=[" + (dbgVers.get(dbgk) ?? "?") + "]");
+        dbgk = dbgk + 1;
+    }
+    console.log("[DBG204] versions end");
+
     assert.equalInt(reg.versions("shop").size(), 2);                 // 1.0.0 + 2.0.0, "current" excluded
 }
 
