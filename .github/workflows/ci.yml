@@ -97,7 +97,14 @@ jobs:
 
       # Core offline suite only (tests/*.nova). run-tests.sh also globs webui/tests, which need datastar;
       # we mirror its per-test logic here minus that glob. Run from lang/ so `../packages` resolves.
-      - name: Core tests (tests/*.nova)
+      #
+      # 183_isolation_sandbox is SKIPPED here and run as root in the next step: level1 asks for
+      # NS_PID|NS_MOUNT|NS_UTS|NS_IPC without NS_USER, and those namespaces need CAP_SYS_ADMIN. The
+      # runner is unprivileged, so clone() returns EPERM and spawnIsolated returns null -- it does NOT
+      # degrade to a plain spawn on Linux (that fallback is the non-Linux branch of io.cpp). Failing
+      # closed is the right behaviour for a security boundary, so the test is given privileges rather
+      # than the sandbox being made to fail open.
+      - name: Core tests (tests/*.nova, unprivileged)
         shell: bash
         run: |
           export PATH="$HOME/.nova/bin:$PATH"
@@ -105,6 +112,9 @@ jobs:
           ORCH="$GITHUB_WORKSPACE/packages/nova-orchestrator"
           pass=0; fail=0
           for t in "$ORCH"/tests/*.nova; do
+            case "$(basename "$t")" in
+              183_isolation_sandbox.nova) echo "SKIP  $(basename "$t")  (root step below)"; continue ;;
+            esac
             if nova test "$t" >/tmp/orch.log 2>&1 && grep -q "0 failed" /tmp/orch.log; then
               echo "PASS  $(basename "$t")"; pass=$((pass+1))
             else
@@ -114,3 +124,29 @@ jobs:
           echo "----------------------------------------"
           echo "orchestrator core: $pass passed, $fail failed"
           [ "$fail" -eq 0 ]
+
+      # `sudo -E` is NOT sufficient: sudoers' secure_path overrides PATH regardless, so `nova` is not
+      # found, and a reset HOME makes the compiler miss ~/.nova (stdlib + runtime archive) and fail
+      # while merely *reading* its own files. Both are therefore passed explicitly through `env`.
+      #
+      # Runs AFTER the unprivileged suite on purpose. Several tests use fixed /tmp paths
+      # (204_artifacts writes /tmp/nova_artifacts_test), so anything root creates is undeletable by
+      # the runner user afterwards; going root-last, and cleaning up, keeps the ordering safe if more
+      # steps are added below.
+      - name: Isolation test (183, needs CAP_SYS_ADMIN)
+        shell: bash
+        run: |
+          export PATH="$HOME/.nova/bin:$PATH"
+          cd lang
+          ORCH="$GITHUB_WORKSPACE/packages/nova-orchestrator"
+          rc=0
+          sudo env "PATH=$PATH" "HOME=$HOME" \
+            nova test "$ORCH/tests/183_isolation_sandbox.nova" >/tmp/orch183.log 2>&1 \
+            && grep -q "0 failed" /tmp/orch183.log || rc=1
+          if [ "$rc" -eq 0 ]; then
+            echo "PASS  183_isolation_sandbox.nova (root)"
+          else
+            echo "::error::FAIL 183_isolation_sandbox.nova (root)"; tail -12 /tmp/orch183.log
+          fi
+          sudo find /tmp -maxdepth 1 -user root -name 'nova*' -exec rm -rf {} + 2>/dev/null || true
+          exit "$rc"
