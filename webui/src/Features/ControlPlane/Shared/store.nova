@@ -11,7 +11,6 @@ import map;
 import string;
 import data.db;
 import novadb;
-import web.di;
 import store.sqlconfig;
 import store.config;
 import orch.manifest;

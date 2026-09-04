@@ -12,7 +12,6 @@
 //   orchweb   # NOVA_ORCHWEB_DSN (default novadb://admin@127.0.0.1:3009?db=nova),
 //             # NOVA_ORCHWEB_NODE (default node-1), NOVA_PORT (default 8130)
 import web.app;
-import web.di;
 import web.request;
 import web.response;
 import web.routing;
