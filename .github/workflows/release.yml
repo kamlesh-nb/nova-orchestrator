@@ -2,16 +2,17 @@ name: release
 
 # Build the orchestrator stack (service / orchd / orchctl / artifactd, + orchweb best-effort) for every
 # shipped OS/arch and publish them to a GitHub Release. Targets: macOS arm64, Linux {x86_64, arm64},
-# Windows {x86_64, arm64}. (macOS Intel is NOT shipped.)
+# Windows x86_64. (macOS Intel and Windows arm64 are NOT shipped -- native arm64-Windows zig build is an
+# upstream Zig crash; see lang/CLAUDE.md.)
 #
 # The orchestrator is NOVA code, so this lives in its OWN workflow (not the lang release): it needs a
 # built `nova` on PATH, which means checking out the lang toolchain and building it (with LLVM) first,
 # exactly as ci.yml does. Keeping it separate keeps the lang release simple and lets the orchestrator cut
 # its own releases on its own tags.
 #
-# Two runners cover all five bundles, because nova cross-compiles APPLICATIONS from any host (only
+# Two runners cover all four bundles, because nova cross-compiles APPLICATIONS from any host (only
 # building nova ITSELF for a target needs that target's LLVM):
-#   * build-cross (Linux x86_64 host): `build.sh --target <triple>` for the four linux/windows targets.
+#   * build-cross (Linux x86_64 host): `build.sh --target <triple>` for the three linux/windows targets.
 #     These four are the link-verified cross targets (see lang/CLAUDE.md). Windows produces real .exe.
 #   * build-macos (macos-14, arm64): a native build (macOS cannot be cross-produced from a non-mac host).
 #
@@ -45,7 +46,7 @@ env:
 
 jobs:
   build-cross:
-    # One Linux x86_64 host cross-compiles the four linux/windows bundles.
+    # One Linux x86_64 host cross-compiles the three linux/windows bundles.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -77,15 +78,15 @@ jobs:
         working-directory: packages/nova-orchestrator
         run: |
           export PATH="$HOME/.nova/bin:$PATH"
-          for t in linux-x86_64 linux-arm64 windows-x86_64 windows-arm64; do
+          for t in linux-x86_64 linux-arm64 windows-x86_64; do
             echo "== building orchestrator for $t =="
             ./build.sh --release --target "$t"
           done
-      - name: Package the four bundles
+      - name: Package the three bundles
         working-directory: packages/nova-orchestrator
         run: |
           root="$PWD"; mkdir -p out
-          for t in linux-x86_64 linux-arm64 windows-x86_64 windows-arm64; do
+          for t in linux-x86_64 linux-arm64 windows-x86_64; do
             d="build/release/$t/bin"; if [ ! -d "$d" ]; then echo "missing $d"; exit 1; fi
             base="nova-orchestrator-${NOVA_VERSION}-${t}"
             case "$t" in
