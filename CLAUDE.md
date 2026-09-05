@@ -1,4 +1,4 @@
-# CLAUDE.md — Kynator (Kyte-native orchestrator)
+# CLAUDE.md: Kynator (Kyte-native orchestrator)
 
 A container-free, Kubernetes-style orchestration stack written in **Kyte**: a control plane that
 supervises workloads (native processes, not containers) with rolling updates, readiness gates,
