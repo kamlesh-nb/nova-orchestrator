@@ -1,6 +1,6 @@
 name: CI
 
-# The orchestrator (service / orchd / orchctl / artifactd) is KYTE code, so unlike nls it needs a built
+# The orchestrator (service / kynatord / kynatorctl / artifactd) is KYTE code, so unlike nls it needs a built
 # `kyte` on PATH -- which means building the lang toolchain (with LLVM) first. Its test harness also
 # assumes the monorepo layout (run-tests.sh uses ../../lang and resolves packages through ../packages),
 # so CI reconstructs that layout by checking out three repos into fixed paths:
@@ -9,7 +9,7 @@ name: CI
 #   packages/nova-orchestrator/  <- this repo
 #   packages/nova-novadb/        <- kamlesh-nb/nova-novadb  (the `import novadb` driver the store uses)
 #
-# SCOPE -- CORE ONLY. build.sh builds service/orchd/orchctl/artifactd and skips orchweb best-effort;
+# SCOPE -- CORE ONLY. build.sh builds service/kynatord/kynatorctl/artifactd and skips orchweb best-effort;
 # the test step runs tests/*.ky only. The orchweb UI and webui/tests are EXCLUDED because they
 # `import datastar`, and nova-datastar is a gitignored, vendored package with no upstream repo to check
 # out here. Publish/vendor datastar to extend this gate to the UI. The opt-in KYTE_LIVE HA tests (real
@@ -89,7 +89,7 @@ jobs:
         working-directory: lang
         run: zig build -Doptimize=ReleaseFast
 
-      - name: Build orchestrator core (service/orchd/orchctl/artifactd; orchweb skipped best-effort)
+      - name: Build orchestrator core (service/kynatord/kynatorctl/artifactd; orchweb skipped best-effort)
         working-directory: packages/nova-orchestrator
         run: |
           export PATH="$HOME/.kyte/bin:$PATH"

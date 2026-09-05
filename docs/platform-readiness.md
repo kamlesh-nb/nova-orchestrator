@@ -13,19 +13,19 @@ you scale is to run more replicas. That has one consequence that drives the whol
 
 - **The data plane (proxy / service VIPs) is the availability mechanism, not a side feature.** It is what
   spreads load across replicas and what keeps serving when a replica or the control plane restarts.
-- **The control plane (orchd + lease) can restart without taking traffic down.** Existing replicas keep serving
-  through the proxy while orchd is away; you only lose the ability to reconcile or scale until it returns.
+- **The control plane (kynatord + lease) can restart without taking traffic down.** Existing replicas keep serving
+  through the proxy while kynatord is away; you only lose the ability to reconcile or scale until it returns.
 
 So workload availability (rolling deploys, readiness-gated load balancing, graceful drain) is mandatory, and
 the control plane's own multi-node HA is optional for medium scale. The tiers below follow from that.
 
 ## Deployment shape for medium scale
 
-Run **one orchd** (control plane) plus **N `service` data-plane instances** (behind SO_REUSEPORT or a single
+Run **one kynatord** (control plane) plus **N `service` data-plane instances** (behind SO_REUSEPORT or a single
 front proxy) plus **many workload replicas**, with NovaDB holding both application data and the orchestrator's
-desired state. A single orchd means the leader lease is never contended, which removes the split-brain hole
-(Tier 2) from the medium-scale critical path entirely. The day one orchd is not enough, Tier 2 makes multi-node
-orchd safe.
+desired state. A single kynatord means the leader lease is never contended, which removes the split-brain hole
+(Tier 2) from the medium-scale critical path entirely. The day one kynatord is not enough, Tier 2 makes multi-node
+kynatord safe.
 
 ## Tracking table
 
@@ -41,7 +41,7 @@ consolidated plan at `../../../PLATFORM-PLAN.md`.
 | T1-5 | Data-plane backpressure + lifecycle | C-T1-5 | P1 | not started (F-11: 64 KB ceiling, idle-fd leak, unbounded client coroutines, no graceful shutdown) |
 | C-Iso | Validate VETH/netns + cgroups on Linux; confirm fd-handoff on Win/macOS | C-Iso | P1 | in progress (degrade is now REPORTED, not silent: `src/orch/supervisor.ky:71-74` reportIsolationOnce logs "Limits are NOT applied" once and slice check 6 gates it; the LIVE VETH/netns + cgroups validation on a real Linux host, and the Windows fd-handoff port, are still outstanding) |
 | T2-1 | Atomic live CAS (split-brain fix) | C-T2-1 | P2 | done (`src/store/sqlconfig.ky:244-250` casBy: a single guarded `UPDATE ... WHERE k=? AND revision=?`, atomic RMW under the table exclusive lock, rows_affected = CAS verdict; create path checks rows_affected at `:236`) |
-| T2-2 | Wire quorum gate into tryAcquire | C-T2-2 | P2 | done (`src/orch/asynclease.ky:57-71` hasQuorum wired into tryAcquire: members configured => registered member + store-visible majority; none => single-orchd mode) |
+| T2-2 | Wire quorum gate into tryAcquire | C-T2-2 | P2 | done (`src/orch/asynclease.ky:57-71` hasQuorum wired into tryAcquire: members configured => registered member + store-visible majority; none => single-kynatord mode) |
 | T2-3 | Promote live fencing test into a gate | C-T2-3 | P2 | partial (logic gated OFFLINE: `tests/198_ha_cluster.ky` fencing + no-split-brain soak; `run-live-tests.sh` NovaDB paths fixed; the live CI gate itself is still outstanding, blocked on a running NovaDB in CI) |
 | T3-* | Tier-3 polish (autoscaler metric, escaping, probe, netns bound, VIP bind, config loud-fail, streaming) | POLISH | P3 | mostly done (VIP bind `src/net/proxy.ky:733` bindAddrFor; output escaping `src/orch/health.ky:112` promLabel, `src/orch/backup.ky:12` escapeField, `src/orch/controlplane.ky` htmlEscape; probe parse `src/orch/nativelet.ky:485-503`; netns bound `src/net/netns.ky:54-63`; config loud-fail `src/cfg/config.ky` badString/badNumber/badBool. Still open: autoscaler per-replica metric F-9, probeAndHeal backoff F-8, proxy >64 KB streaming F-11) |
 
@@ -123,10 +123,10 @@ buffer, and every accept/health loop is `while(true)` with no cancellation.
 - Add a graceful shutdown path (a cancellation flag the accept and health loops check) so a `service` instance
   can drain and exit cleanly for a rolling data-plane upgrade.
 
-## Tier 2: multi-node control-plane HA (only when one orchd is not enough)
+## Tier 2: multi-node control-plane HA (only when one kynatord is not enough)
 
-Defer this for medium scale by running a single orchd. Do not ship the lease as if it were safe while the CAS
-races; either fix it or document single-orchd. When you do want orchd HA:
+Defer this for medium scale by running a single kynatord. Do not ship the lease as if it were safe while the CAS
+races; either fix it or document single-kynatord. When you do want kynatord HA:
 
 ### T2-1: make the live CAS atomic (the split-brain fix)
 
@@ -148,7 +148,7 @@ but unsafe in production.
 ### T2-2: wire the quorum gate
 
 `membership.quorum()` (`src/orch/membership.ky:49-52`) is documented as the guard that stops a minority
-partition electing, but neither lease calls it (only `bin/orchctl.ky:66` does, for a status printout). Call
+partition electing, but neither lease calls it (only `bin/kynatorctl.ky:66` does, for a status printout). Call
 it from `tryAcquire` (`src/orch/lease.ky:90`, `src/orch/asynclease.ky:37`) so a node that cannot see a
 quorum of members does not attempt to become leader.
 
@@ -190,8 +190,8 @@ None of these block medium-scale use; they reduce operational surprise.
 
 1. Tier 1 in order (T1-1 rolling update, T1-2 readiness gate, T1-3 graceful drain, T1-4 atomic discovery,
    T1-5 data-plane backpressure). This is what makes a zero-downtime deploy and health-gated scaling real.
-2. Ship medium scale with a single orchd; document that orchd is single-instance for now.
-3. Tier 2 when multi-node orchd is needed (T2-1 atomic CAS is the crux, then T2-2 quorum, then T2-3 the live
+2. Ship medium scale with a single kynatord; document that kynatord is single-instance for now.
+3. Tier 2 when multi-node kynatord is needed (T2-1 atomic CAS is the crux, then T2-2 quorum, then T2-3 the live
    gate).
 4. Tier 3 continuously, as operability polish.
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Build the binaries of the split orchestrator stack:
 #   service  -- the data plane   (L7 reverse proxy / load balancer)
-#   orchd    -- the control plane (nativelet reconcile loop)
-#   orchctl  -- the operator CLI  (writes desired state, offline ops)
-#   artifactd-- the artifact origin (content-addressed blob store for deploy binaries; CI pushes, orchd pulls)
+#   kynatord    -- the control plane (nativelet reconcile loop)
+#   kynatorctl  -- the operator CLI  (writes desired state, offline ops)
+#   artifactd-- the artifact origin (content-addressed blob store for deploy binaries; CI pushes, kynatord pulls)
 #   orchweb  -- the operator UI   (a Tailwind web app under webui/: node/service/replica tree + manifest forms)
 #
 # Each entrypoint lives in bin/ and pulls only its slice of the package via the import graph, so the
@@ -69,14 +69,14 @@ build_one() { # $1 = name, $2 = source .ky
 mkdir -p "$outdir"
 echo "Building service (data plane)...${target:+ [target=$target]}"
 build_one service bin/service.ky
-echo "Building orchd (control plane)...${target:+ [target=$target]}"
-build_one orchd bin/orchd.ky
-echo "Building orchctl (operator CLI)...${target:+ [target=$target]}"
-build_one orchctl bin/orchctl.ky
+echo "Building kynatord (control plane)...${target:+ [target=$target]}"
+build_one kynatord bin/kynatord.ky
+echo "Building kynatorctl (operator CLI)...${target:+ [target=$target]}"
+build_one kynatorctl bin/kynatorctl.ky
 echo "Building artifactd (blob origin)...${target:+ [target=$target]}"
 build_one artifactd bin/artifactd.ky
 # orchweb is the OPTIONAL control-plane UI; its sources live under webui/ (a work-in-progress tree). Build
-# it best-effort so a missing or not-yet-building webui never fails the core stack (service/orchd/orchctl),
+# it best-effort so a missing or not-yet-building webui never fails the core stack (service/kynatord/kynatorctl),
 # which is what the platform slice and the acceptance test actually depend on.
 orchweb_built=0
 if [ -f webui/src/main.ky ]; then
@@ -89,8 +89,8 @@ if [ -f webui/src/main.ky ]; then
 fi
 echo "Built:"
 echo "  $outdir/service$ext"
-echo "  $outdir/orchd$ext"
-echo "  $outdir/orchctl$ext"
+echo "  $outdir/kynatord$ext"
+echo "  $outdir/kynatorctl$ext"
 echo "  $outdir/artifactd$ext"
 if [ "$orchweb_built" = 1 ]; then echo "  $outdir/orchweb$ext"; fi
 echo

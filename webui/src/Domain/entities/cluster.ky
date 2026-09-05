@@ -2,7 +2,7 @@
 // dependency on the store or the manifest schema (the repository maps a manifest into a ServiceView).
 import list;
 
-// A cluster node (an orchd member).
+// A cluster node (an kynatord member).
 pub struct NodeView {
     pub id: string,
     pub address: string,

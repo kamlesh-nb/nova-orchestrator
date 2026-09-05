@@ -4,7 +4,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.ky.artifactd</string>
+    <string>com.kyte.artifactd</string>
     <key>ProgramArguments</key>
     <array>
         <string>@BIN_DIR@/artifactd</string>

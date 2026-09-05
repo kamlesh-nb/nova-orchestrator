@@ -1,6 +1,6 @@
 // cfg/config.ky -- typed, validated JSON configuration for the two orchestrator binaries.
 //
-// The stack is split into a DATA plane (service, net.*) and a CONTROL plane (orchd, orch.*/store.*),
+// The stack is split into a DATA plane (service, net.*) and a CONTROL plane (kynatord, orch.*/store.*),
 // each with its own binary and its own config file. This module is the single place that reads and
 // VALIDATES those files, so a bad config fails loudly at startup with a clear message instead of the
 // daemon limping on with silent defaults (the same "no env band-aids" discipline the btree config took).
@@ -14,7 +14,7 @@ import io.file;
 import env;
 
 // Resolve the config-file path: first positional (non-flag) CLI argument, else `envVar`, else `dflt`.
-// Shared by both daemons so `service [config.json]` / `orchd [config.json]` and SERVICE_CONFIG /
+// Shared by both daemons so `service [config.json]` / `kynatord [config.json]` and SERVICE_CONFIG /
 // ORCHD_CONFIG behave identically; `--flags` are skipped here (see hasFlag).
 pub fn resolveConfigPath(envVar: string, dflt: string): string {
     let a = env.args();
@@ -101,7 +101,7 @@ pub struct ProxyConfig {
     pub healthFall: int,
     pub backends: list.List<BackendCfg>,
     // Control-plane seam: when set, service resolves its backend endpoint from a service-discovery file
-    // (written by orchd's ServiceRegistry) instead of, or in addition to, the static `backends` list.
+    // (written by kynatord's ServiceRegistry) instead of, or in addition to, the static `backends` list.
     pub discoveryFile: string,
     pub discoveryService: string,
     // Set by loadProxyConfig when a present field has the wrong JSON type; validateProxy fails on it.
@@ -228,12 +228,12 @@ pub fn knownStrategy(s: string): bool {
         || string.eql(s, "leastconn") || string.eql(s, "consistenthash");
 }
 
-// ---- orchd config store (O4): the artifactd-hosted config store over HTTP ----
+// ---- kynatord config store (O4): the artifactd-hosted config store over HTTP ----
 
-// How orchd's HttpConfigStore reaches the config store. The store now lives INSIDE artifactd (the deploy
+// How kynatord's HttpConfigStore reaches the config store. The store now lives INSIDE artifactd (the deploy
 // blob origin), reached over its /cfg/* HTTP routes -- NovaDB has been removed from the stack. `addr` is
 // artifactd's host:port, `token` is the same deploy bearer token artifactd guards its routes with, and
-// `tls` selects https for the hop. Empty token => auth disabled (dev only). enabled=false => orchd runs
+// `tls` selects https for the hop. Empty token => auth disabled (dev only). enabled=false => kynatord runs
 // without a config store (manifest-only, single-node reconcile).
 pub struct StoreConfig {
     pub enabled: bool,
@@ -262,22 +262,22 @@ pub fn validateStore(s: StoreConfig): string {
     return "";
 }
 
-// ---- orchd (control plane) ----
+// ---- kynatord (control plane) ----
 
 pub struct OrchConfig {
     pub manifestsDir: string,        // dir of *.json workload manifests the nativelet reconciles
     pub reconcileMs: int,            // reconcile loop period
     pub nodeId: string,              // this node's identity (leader lease + logging)
-    // Optional service-discovery publication: the endpoints orchd advertises for service to consume.
+    // Optional service-discovery publication: the endpoints kynatord advertises for service to consume.
     pub discoveryFile: string,       // "" = do not publish
     pub advertiseHost: string,       // host service should reach the replicas on (published in the file)
     pub store: StoreConfig,          // O4: authenticated (+ optional TLS) btree config-store connection
-    // O5 observability: when metricsFile is set, orchd writes Prometheus exposition text (+ orch_alert
+    // O5 observability: when metricsFile is set, kynatord writes Prometheus exposition text (+ orch_alert
     // series) there each reconcile tick for a node_exporter textfile collector to scrape; crashLoopRestarts
     // is the per-workload restart count at/above which a crash-loop alert fires.
     pub metricsFile: string,
     pub crashLoopRestarts: int,
-    // Path to the `service` (gateway) binary. When set, orchd launches + supervises a service process for
+    // Path to the `service` (gateway) binary. When set, kynatord launches + supervises a service process for
     // each handoff workload (on its rendezvous). "" = do not manage the service (deploy it out-of-band).
     pub servicePath: string,
     // Set by loadOrchConfig when a present field has the wrong JSON type; validateOrch fails on it.

@@ -18,7 +18,7 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Securit
 }
 if (-not $Nssm) { $c = Get-Command nssm.exe -ErrorAction SilentlyContinue; if ($c) { $Nssm = $c.Source } }
 
-foreach ($name in "kyte-service","kyte-orchd","kyte-artifactd") {
+foreach ($name in "kyte-service","kyte-kynatord","kyte-artifactd") {
   # Try NSSM service first, then Scheduled Task -- either may exist.
   $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
   if ($svc) {

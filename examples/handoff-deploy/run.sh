@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Live end-to-end handoff deployment (the shape orchd drives from a manifest): from ONE workload name it
+# Live end-to-end handoff deployment (the shape kynatord drives from a manifest): from ONE workload name it
 # derives the rendezvous /tmp/kyte-<name>.sock, starts the SERVICE (gateway) with KYTE_HANDOFF_SOCK +
 # KYTE_PORT, starts N APP replicas with KYTE_HANDOFF_SOCK, and curls the front port. The Kyte equivalent
-# — via supervisors + manifest.serviceSpecFor/toSpec — is in deploy.ky (what orchd runs); it sets the
+# — via supervisors + manifest.serviceSpecFor/toSpec — is in deploy.ky (what kynatord runs); it sets the
 # same env. (The app's connect-backoff means launch ordering no longer matters.)
 set -u
 export PATH="$HOME/.kyte/bin:$PATH"

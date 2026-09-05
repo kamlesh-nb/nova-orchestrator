@@ -3,7 +3,7 @@
 // writable, browser-facing operator surface: a Tailwind + Datastar dashboard whose sidebar is a collapsible
 // tree of nodes -> services -> replica slots. Clicking a service loads its complete manifest as an editable
 // form; clicking a node loads its info + a deploy screen. Every deploy / teardown writes a manifest to the
-// SAME NovaDB config store orchd reconciles from, so the fleet actually changes.
+// SAME NovaDB config store kynatord reconciles from, so the fleet actually changes.
 //
 // The shell (wwwroot/index.html) is static and served via useStatic; each slice's handler returns a Datastar
 // SSE fragment that the shell morphs into #tree / #detail / #toast. Handlers are discovered by their

@@ -1,20 +1,20 @@
 [Unit]
-Description=Kyte orchd (control plane: reconcile, supervise replicas, HA lease, discovery)
+Description=Kyte kynatord (control plane: reconcile, supervise replicas, HA lease, discovery)
 Documentation=https://github.com/kamlesh-nb/nova-orchestrator
 After=network-online.target kyte-artifactd.service
 Wants=network-online.target
-# orchd's config store client talks to artifactd; start it after artifactd when they share a host.
+# kynatord's config store client talks to artifactd; start it after artifactd when they share a host.
 After=kyte-artifactd.service
 
 [Service]
 Type=simple
-# orchd SPAWNS and supervises the workload replicas and (on Linux) applies cgroup / network-namespace
+# kynatord SPAWNS and supervises the workload replicas and (on Linux) applies cgroup / network-namespace
 # isolation, which needs privilege. It runs as root by default for that reason. If you do not use the
 # isolation features you can drop this to an unprivileged user, but then resource limits / netns are off.
 User=root
 Group=root
-# orchd [config.json]  -- default orchd.json, or point ORCHD_CONFIG at it. We pass the path explicitly.
-ExecStart=/opt/nova-orchestrator/bin/orchd /etc/nova-orchestrator/orchd.json
+# kynatord [config.json]  -- default kynatord.json, or point ORCHD_CONFIG at it. We pass the path explicitly.
+ExecStart=/opt/nova-orchestrator/bin/kynatord /etc/nova-orchestrator/kynatord.json
 WorkingDirectory=/var/lib/nova-orchestrator
 Restart=on-failure
 RestartSec=2

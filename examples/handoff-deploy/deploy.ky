@@ -1,6 +1,6 @@
-// orchd-style handoff deployment, end to end: from ONE manifest, launch the workload's SERVICE (gateway)
+// kynatord-style handoff deployment, end to end: from ONE manifest, launch the workload's SERVICE (gateway)
 // and its APP replicas, both in fd-handoff mode on the same rendezvous, via supervisors — exactly what
-// orchd's reconcile does. The service binds the front port + rendezvous; the apps connect and receive
+// kynatord's reconcile does. The service binds the front port + rendezvous; the apps connect and receive
 // client sockets. Prove it by curling the front port. Args: <webappBinary> <serviceBinary>.
 import orch.manifest;
 import orch.supervisor;
@@ -27,7 +27,7 @@ fn main(): int {
     apps.start();
 
     console.log("deployed 'shop': service on :8140 (handoff /tmp/kyte-shop.sock) + 2 app replicas");
-    // Stay alive like orchd's reconcile loop (poll the supervisors), keeping the children supervised.
+    // Stay alive like kynatord's reconcile loop (poll the supervisors), keeping the children supervised.
     while (true) {
         sys.ky_sleep_ms(1000);
         svc.poll();

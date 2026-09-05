@@ -6,7 +6,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.ky.service</string>
+    <string>com.kyte.service</string>
     <key>ProgramArguments</key>
     <array>
         <string>@BIN_DIR@/service</string>

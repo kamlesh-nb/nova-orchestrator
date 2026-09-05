@@ -2,10 +2,10 @@
 //
 // A standalone L7/L4 reverse proxy + load balancer: it owns TRAFFIC, nothing else. It builds a backend
 // Pool from a validated JSON config (static backends and/or a control-plane service-discovery file that
-// orchd publishes), applies the configured LB strategy + active health checks, and serves forever with
+// kynatord publishes), applies the configured LB strategy + active health checks, and serves forever with
 // the share-nothing per-reactor accept fan-out. In fd-handoff mode it passes client sockets to the app
 // directly (out of the data path). It has no knowledge of workload lifecycle, manifests, or the config
-// store -- that is orchd's job. The two coordinate ONLY through the discovery file.
+// store -- that is kynatord's job. The two coordinate ONLY through the discovery file.
 //
 //   service [config.json]       # default: service.json ; or set SERVICE_CONFIG ; KYTE_PORT overrides the port
 import net.proxy;
@@ -15,7 +15,7 @@ import cfg.config;
 import env;
 import string;
 
-// Add EVERY endpoint advertised for the service in the discovery file (written by orchd each reconcile
+// Add EVERY endpoint advertised for the service in the discovery file (written by kynatord each reconcile
 // tick), so the pool tracks all replicas the control plane manages. Active health checks then prune any
 // that are not actually serving yet. Returns how many backends were added.
 fn addDiscovered(pool: proxy.Pool, discoveryFile: string, svc: string): int {

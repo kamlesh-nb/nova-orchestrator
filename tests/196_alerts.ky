@@ -1,4 +1,4 @@
-// 196 -- O5 observability: alert evaluation + the /metrics render orchd publishes each tick. Pure/offline
+// 196 -- O5 observability: alert evaluation + the /metrics render kynatord publishes each tick. Pure/offline
 // (no sockets, no daemon): builds HealthReports + WorkloadStatuses directly and asserts which alerts fire,
 // their severities, the Prometheus render, and that a written metrics file carries the scrapeable series.
 import assert;
@@ -105,7 +105,7 @@ fn test_standalone_report_is_ready(): void {
 
 @test
 fn test_metrics_file_carries_series_and_alerts(): void {
-    // A workload at 1/3 replicas -> under-provisioned. Render the full /metrics payload orchd writes and
+    // A workload at 1/3 replicas -> under-provisioned. Render the full /metrics payload kynatord writes and
     // confirm a scraper would see both the gauges and the alert series.
     let rep = okReport();
     let st = oneStatus("web", 3, 1, 0);

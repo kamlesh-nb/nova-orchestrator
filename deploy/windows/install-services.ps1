@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Install the Kyte orchestrator daemons (artifactd, orchd, service) so they run at boot on Windows.
+  Install the Kyte orchestrator daemons (artifactd, kynatord, service) so they run at boot on Windows.
 
 .DESCRIPTION
   The daemons are console programs, which Windows cannot run as native services directly (a service must
@@ -14,13 +14,13 @@
 
   Default: Nssm if nssm.exe is found, else ScheduledTask.
 
-  NOTE: on Windows the fd-handoff data plane (service / orchd) is POSIX-only by design and its socket
+  NOTE: on Windows the fd-handoff data plane (service / kynatord) is POSIX-only by design and its socket
   passing is stubbed, so those two are best-effort here. artifactd (blob + config store, HTTP) and
-  orchctl (CLI) are fully functional. See the orchestrator CLAUDE.md.
+  kynatorctl (CLI) are fully functional. See the orchestrator CLAUDE.md.
 
-.PARAMETER From      Directory containing service.exe / orchd.exe / orchctl.exe / artifactd.exe.
+.PARAMETER From      Directory containing service.exe / kynatord.exe / kynatorctl.exe / artifactd.exe.
 .PARAMETER BinDir    Install location for the binaries.       Default C:\Program Files\nova-orchestrator\bin
-.PARAMETER ConfDir   Config directory (orchd.json/service.json). Default C:\ProgramData\nova-orchestrator\config
+.PARAMETER ConfDir   Config directory (kynatord.json/service.json). Default C:\ProgramData\nova-orchestrator\config
 .PARAMETER DataDir   Data directory (artifacts, config.snap).  Default C:\ProgramData\nova-orchestrator\data
 .PARAMETER Method    Nssm | ScheduledTask
 .PARAMETER Nssm      Path to nssm.exe (if not on PATH).
@@ -55,12 +55,12 @@ Write-Host "Method: $Method$(if($Method -eq 'Nssm'){" (nssm=$Nssm)"})"
 # Lay down binaries + config.
 New-Item -ItemType Directory -Force -Path $BinDir, $ConfDir, (Join-Path $DataDir "artifacts"), (Join-Path $DataDir "manifests") | Out-Null
 $From = (Resolve-Path $From).Path
-foreach ($b in "service","orchd","orchctl","artifactd") {
+foreach ($b in "service","kynatord","kynatorctl","artifactd") {
   $src = Join-Path $From "$b.exe"
   if (-not (Test-Path $src)) { throw "missing $src (build with `./build.sh --release --target windows-arm64` first)" }
   Copy-Item -Force $src (Join-Path $BinDir "$b.exe")
 }
-$orchdCfg   = Join-Path $ConfDir "orchd.json"
+$orchdCfg   = Join-Path $ConfDir "kynatord.json"
 $serviceCfg = Join-Path $ConfDir "service.json"
 if (-not (Test-Path $orchdCfg)) {
   @"
@@ -88,7 +88,7 @@ if (-not (Test-Path $serviceCfg)) {
 $artRoot = (Join-Path $DataDir "artifacts")
 $daemons = @(
   @{ Name="kyte-artifactd"; Exe=(Join-Path $BinDir "artifactd.exe"); Args=@();            Env=@{ KYTE_ARTIFACT_ROOT=$artRoot; KYTE_PORT="8135"; KYTE_ARTIFACT_TOKEN="" } },
-  @{ Name="kyte-orchd";     Exe=(Join-Path $BinDir "orchd.exe");     Args=@($orchdCfg);   Env=@{} },
+  @{ Name="kyte-kynatord";     Exe=(Join-Path $BinDir "kynatord.exe");     Args=@($orchdCfg);   Env=@{} },
   @{ Name="kyte-service";   Exe=(Join-Path $BinDir "service.exe");   Args=@($serviceCfg); Env=@{} }
 )
 
@@ -127,7 +127,7 @@ Write-Host ""
 if ($Method -eq "Nssm") {
   Write-Host "Installed as Windows services. Manage with: sc.exe {start|stop|query} kyte-artifactd (or services.msc)."
 } else {
-  Write-Host "Installed as Scheduled Tasks (run at startup as SYSTEM). Manage with: schtasks /Query /TN kyte-orchd, or Task Scheduler."
+  Write-Host "Installed as Scheduled Tasks (run at startup as SYSTEM). Manage with: schtasks /Query /TN kyte-kynatord, or Task Scheduler."
 }
 Write-Host "Binaries: $BinDir   Config: $ConfDir   Data: $DataDir"
 Write-Host "Put the artifactd deploy token in the service/task env (KYTE_ARTIFACT_TOKEN) for production."

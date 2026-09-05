@@ -11,7 +11,7 @@
 //
 // Correctness of the leader election rests on the CAS being atomic. Here it is trivially so: artifactd is
 // a single-reactor process that serves one request at a time, and every CAS is a single synchronous call
-// into one in-memory store, so two racing orchd nodes are serialised by the reactor and exactly one wins
+// into one in-memory store, so two racing kynatord nodes are serialised by the reactor and exactly one wins
 // an epoch. (That is a simpler, more obviously-correct arbiter than the distributed guarded-UPDATE the
 // SQL path needed.)
 //
@@ -20,7 +20,7 @@
 // watch(sinceRevision) continuity survives a restart -- the same durability NovaDB gave, for a few MB.
 //
 // HONEST SCOPE: artifactd is the single coordination point, exactly as the shared NovaDB was -- this is
-// parity, not new HA. Multiple orchd nodes fail over correctly against it via CAS; making the coordinator
+// parity, not new HA. Multiple kynatord nodes fail over correctly against it via CAS; making the coordinator
 // ITSELF replicated (a standby artifactd) is a separate, larger piece and is intentionally not built here.
 
 import io.file;
@@ -183,7 +183,7 @@ pub struct CfgPut impl RouteHandler {
     init(cfg: DurableConfigStore) { self.cfg = cfg; }
     async fn serve(self: CfgPut, ctx: routing.Context): Response {
         // Fence: a stamped write below the high-water is a fenced old leader -- reject. An unstamped
-        // write (epoch 0, e.g. an operator/orchctl action) is never fenced.
+        // write (epoch 0, e.g. an operator/kynatorctl action) is never fenced.
         let ep = string.parseLong(hdr(ctx, "x-cfg-epoch")) ?? (0 as long);
         if (ep > 0 && ep < self.cfg.writeEpoch) { return resp(412, "fenced"); }
         let by = hdr(ctx, "x-cfg-by");

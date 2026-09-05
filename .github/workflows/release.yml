@@ -1,6 +1,6 @@
 name: release
 
-# Build the orchestrator stack (service / orchd / orchctl / artifactd, + orchweb best-effort) and publish
+# Build the orchestrator stack (service / kynatord / kynatorctl / artifactd, + orchweb best-effort) and publish
 # it to a GitHub Release. Targets: Linux {x86_64, arm64}.
 #
 # Modelled on the lang toolchain's release workflow: each bundle is built NATIVELY on a runner of that

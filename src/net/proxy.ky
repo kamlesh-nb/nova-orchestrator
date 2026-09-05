@@ -849,7 +849,7 @@ pub fn serveOnReactor(pool: Pool, port: int, tmo: int): void {
 // control channel (SCM_RIGHTS); the app replies to the client directly and service is out of the data
 // path. service does not parse HTTP here, so selection is per-CONNECTION round-robin (no path affinity,
 // no response buffering, no keep-alive backend pool -- none of those apply once the app owns the socket).
-// Same-host only: fd-passing cannot cross a kernel, which fits the orchd co-resident node topology.
+// Same-host only: fd-passing cannot cross a kernel, which fits the kynatord co-resident node topology.
 // ---------------------------------------------------------------------------
 
 // Live backend app control channels, plus the round-robin cursor. Mutated by two coroutines on ONE

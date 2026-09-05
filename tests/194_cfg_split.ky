@@ -1,4 +1,4 @@
-// 194 -- config surface for the split service/orchd binaries: defaults, JSON load, and validation.
+// 194 -- config surface for the split service/kynatord binaries: defaults, JSON load, and validation.
 // Pure/offline (no sockets); exercises cfg.config the two entrypoints depend on so a bad config is
 // rejected loudly at startup rather than silently defaulted.
 import assert;
@@ -94,7 +94,7 @@ fn test_proxy_missing_file_is_defaults(): void {
     assert.equalInt(c.backends.size(), 0);
 }
 
-// ---- orchd defaults + validation ----
+// ---- kynatord defaults + validation ----
 
 @test
 fn test_orch_defaults_and_validate(): void {

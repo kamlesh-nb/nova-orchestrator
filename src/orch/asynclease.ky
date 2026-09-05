@@ -51,9 +51,9 @@ pub struct AsyncLeaderLease {
     // set; a node partitioned away from the store cannot list() at all and so cannot pass this gate or run
     // the CAS. When members ARE configured, only a registered member may take the lease (a stray node
     // cannot hijack it), and the reachable count must meet N/2+1. When NO members are registered the
-    // cluster is in single-orchd / legacy mode (the slice does not register membership) and election is
+    // cluster is in single-kynatord / legacy mode (the slice does not register membership) and election is
     // allowed unchanged. The CAS (one winner per epoch) remains the primary split-brain arbiter; this gate
-    // is defence in depth for the multi-orchd topology.
+    // is defence in depth for the multi-kynatord topology.
     async fn hasQuorum(self: AsyncLeaderLease): bool {
         let mem = await self.store.list("members/");
         // A store we cannot reach reads back as an EMPTY member list, which must NOT be

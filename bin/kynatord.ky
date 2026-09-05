@@ -1,4 +1,4 @@
-// orchd -- the CONTROL-plane binary of the split orchestrator stack.
+// kynatord -- the CONTROL-plane binary of the split orchestrator stack.
 //
 // The node agent (nativelet): it owns DESIRED STATE, not traffic. It watches a directory of declarative
 // YAML workload manifests (legacy JSON specs still parse) and reconciles desired vs actual -- spawning
@@ -6,7 +6,7 @@
 // policy, running health probes -- on a fixed loop. It has no listen port and forwards no requests; the
 // data plane (service) does that. The two coordinate ONLY through a service-discovery file.
 //
-//   orchd [config.json]         # default: orchd.json ; or set ORCHD_CONFIG
+//   kynatord [config.json]         # default: kynatord.json ; or set ORCHD_CONFIG
 import orch.nativelet;
 import orch.health;
 import orch.alerts;
@@ -65,13 +65,13 @@ fn nowMs(): long { return datetime.nowNs() / 1000000; }
 // storeReachable) rather than the standalone one.
 async fn haRun(n: nativelet.Nativelet, c: config.OrchConfig): int {
     let base = config.storeBaseUrl(c.store);
-    console.log(`orchd: HA mode, config store at ${base}`);
+    console.log(`kynatord: HA mode, config store at ${base}`);
     let store = httpconfig.HttpConfigStore(base, c.store.token);
     let _s = await store.ensureSchema();
     // TTL is a few reconcile periods so a single slow tick does not drop leadership; floor at 15s.
     let ttl = (c.reconcileMs * 5) as long;
     if (ttl < 15000) { ttl = 15000; }
-    let lease = asynclease.AsyncLeaderLease(store, c.nodeId, "leases/orchd", ttl);
+    let lease = asynclease.AsyncLeaderLease(store, c.nodeId, "leases/kynatord", ttl);
 
     let metricsOn = !string.eql(c.metricsFile, "");
     let t = alerts.AlertThresholds();
@@ -95,24 +95,24 @@ async fn haRun(n: nativelet.Nativelet, c: config.OrchConfig): int {
 }
 
 fn main(): int {
-    let path = config.resolveConfigPath("ORCHD_CONFIG", "orchd.json");
+    let path = config.resolveConfigPath("ORCHD_CONFIG", "kynatord.json");
     let c = config.loadOrchConfig(path);
 
     let err = config.validateOrch(c);
     if (!string.eql(err, "")) {
-        console.log(`orchd: invalid config (${path}): ${err}`);
+        console.log(`kynatord: invalid config (${path}): ${err}`);
         return 1;
     }
 
     if (config.hasFlag("--check")) {
-        console.log(`orchd: config OK (${path}), node=${c.nodeId}, manifests=${c.manifestsDir}`);
+        console.log(`kynatord: config OK (${path}), node=${c.nodeId}, manifests=${c.manifestsDir}`);
         return 0;
     }
 
     let disc = if (string.eql(c.discoveryFile, "")) "off" else c.discoveryFile;
     let met = if (string.eql(c.metricsFile, "")) "off" else c.metricsFile;
     let mode = if (c.store.enabled) "ha(store)" else "standalone(manifests)";
-    console.log(`orchd: node=${c.nodeId} mode=${mode} reconcile=${c.reconcileMs}ms manifests=${c.manifestsDir} discovery=${disc} metrics=${met}`);
+    console.log(`kynatord: node=${c.nodeId} mode=${mode} reconcile=${c.reconcileMs}ms manifests=${c.manifestsDir} discovery=${disc} metrics=${met}`);
     // holdReactors before the block-drive (the reconcile loop's async probes + the store connection need
     // live reactors), then run forever. The run fns are async; calling from sync main() block-drives them.
     aio.holdReactors();
@@ -120,7 +120,7 @@ fn main(): int {
     // Publish live service endpoints for service to load-balance across (no-op unless discoveryFile is set).
     n.discoveryFile = c.discoveryFile;
     n.advertiseHost = c.advertiseHost;
-    n.servicePath = c.servicePath;   // when set, orchd launches each handoff workload's service too
+    n.servicePath = c.servicePath;   // when set, kynatord launches each handoff workload's service too
     if (c.store.enabled) {
         // HA: connect to the config store and run the leader-lease-gated store reconcile loop.
         let _ = haRun(n, c);

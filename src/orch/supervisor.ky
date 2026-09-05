@@ -35,7 +35,7 @@ pub class Supervisor {
     pub procs: list.List<process.Process>,  // live replica processes
     // Port assigned to each live replica (parallel to procs; -1 = none). When spec.basePort > 0 and
     // spec.portFlag is set, each replica is spawned with a DISTINCT port from [basePort, ...] so the
-    // endpoints orchd advertises are actually served. Kept in lockstep with procs on spawn/reap/kill.
+    // endpoints kynatord advertises are actually served. Kept in lockstep with procs on spawn/reap/kill.
     pub ports: list.List<int>,
     // Per-replica netns /30 slot (parallel to procs; empty unless spec.netns). Each live replica owns a
     // network namespace + veth pair identified by its slot; kept in lockstep with procs on spawn/kill.
@@ -71,7 +71,7 @@ pub class Supervisor {
     fn reportIsolationOnce(self: Supervisor): void {
         if (self.reportedIsolation) { return; }
         if (isolation.requestsIsolation(self.spec) && !isolation.available()) {
-            console.log(`orchd: workload '${self.spec.name}' requests resource limits or isolation, but this platform has no cgroups v2 (not Linux). Limits are NOT applied; the replicas run UNCONSTRAINED. This is reported, never silently claimed.`);
+            console.log(`kynatord: workload '${self.spec.name}' requests resource limits or isolation, but this platform has no cgroups v2 (not Linux). Limits are NOT applied; the replicas run UNCONSTRAINED. This is reported, never silently claimed.`);
         }
         self.reportedIsolation = true;
     }
@@ -205,7 +205,7 @@ pub class Supervisor {
     // against a WALL-CLOCK deadline instead: it returns the instant the process exits (typically fast once
     // the app has drained), so the full window is spent only on an app that ignores SIGTERM. There is no
     // sync sleep primitive in a sync method, so this is a bounded busy-poll; a stop is rare (scale-down or
-    // rolling deploy) and the window is short, so the cost is acceptable for a single-orchd control plane.
+    // rolling deploy) and the window is short, so the cost is acceptable for a single-kynatord control plane.
     fn stopProc(self: Supervisor, p: process.Process): void {
         let _ = p.terminate();                                  // SIGTERM: drain and exit cleanly
         let startNs = datetime.nowNs();
@@ -374,7 +374,7 @@ pub class Supervisor {
     }
 
     // The service endpoints this workload ADVERTISES on `host` -- the desired topology (pure; see
-    // spec.serviceEndpoints). orchd publishes these to the discovery file; service health-checks liveness.
+    // spec.serviceEndpoints). kynatord publishes these to the discovery file; service health-checks liveness.
     pub fn advertisedEndpoints(self: Supervisor, host: string): list.List<string> {
         // Handoff mode: nothing to advertise — the service reaches the apps over the AF_UNIX rendezvous
         // (they register by connecting to it), not via host:port discovery.

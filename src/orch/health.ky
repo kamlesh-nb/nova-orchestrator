@@ -88,7 +88,7 @@ fn boolMetric(b: bool): string {
 
 // A self-health report for a STANDALONE (non-HA) node: no lease, so role="standalone" (which ready()
 // treats as ready), the store is assumed reachable, and the workload gauges come straight from the
-// nativelet. orchd uses this to publish /metrics + evaluate alerts without a config store or a lease.
+// nativelet. kynatord uses this to publish /metrics + evaluate alerts without a config store or a lease.
 pub fn standaloneReport(n: nativelet.Nativelet): HealthReport {
     return HealthReport("standalone", 0, "", true, n.jobs.size(), n.totalRunning(), n.underProvisioned(), 0, 0);
 }

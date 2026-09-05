@@ -1,7 +1,7 @@
 // artifactd -- the artifact daemon of the orchestrator stack.
 //
 // A content-addressed blob origin for deploy binaries. CI uploads a native binary keyed by its sha256
-// (idempotent, verified), and each orchd node pulls it by hash into a local cache before spawning a
+// (idempotent, verified), and each kynatord node pulls it by hash into a local cache before spawning a
 // replica (see orch/artifact.ky). This is the distribution point for the deploy flow; the desired-state
 // manifest (which references the artifact by hash) lives in the NovaDB config store, not here.
 //

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Host gate for the orchestrator stack (service data plane + orchd control plane + orchctl/orchweb operator
+# Host gate for the orchestrator stack (service data plane + kynatord control plane + kynatorctl/orchweb operator
 # surfaces). Builds all binaries and runs the full Kyte test suite on THIS host OS, exiting non-zero on any
 # failure. Needs `kyte`
 # on PATH (from the lang gate's `zig build`) and the lang toolchain beside this repo. See CI-POLICY.md.
@@ -10,7 +10,7 @@ OS="$(uname -s)-$(uname -m)"
 fail=0
 step() { echo; echo ">>> $* [$OS]"; }
 
-step "build service + orchd + orchctl + orchweb"
+step "build service + kynatord + kynatorctl + orchweb"
 ./build.sh || fail=1
 
 if [ $fail -eq 0 ]; then
@@ -27,5 +27,5 @@ if [ $fail -eq 0 ] && [ "${KYTE_LIVE:-0}" = "1" ]; then
 fi
 
 echo
-if [ $fail -eq 0 ]; then echo "GATE PASS  orchestrator (service/orchd/orchctl/orchweb)  [$OS]"; else echo "GATE FAIL  orchestrator  [$OS]"; fi
+if [ $fail -eq 0 ]; then echo "GATE PASS  orchestrator (service/kynatord/kynatorctl/orchweb)  [$OS]"; else echo "GATE FAIL  orchestrator  [$OS]"; fi
 exit $fail

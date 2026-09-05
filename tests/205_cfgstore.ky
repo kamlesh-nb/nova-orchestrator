@@ -16,10 +16,10 @@ import artifacts.cfgstore;
 fn test_wire_entries_roundtrip(): void {
     let xs = list.List<config.ConfigEntry>();
     let a = config.ConfigEntry("workloads/web", "name: web\nreplicas: 2", 7 as long);
-    a.updatedBy = "orchctl";
+    a.updatedBy = "kynatorctl";
     a.updatedAt = 1725000000 as long;
     xs.push(a);
-    xs.push(config.ConfigEntry("leases/orchd", "nodeA|3|1725000123456", 8 as long));
+    xs.push(config.ConfigEntry("leases/kynatord", "nodeA|3|1725000123456", 8 as long));
 
     let decoded = wire.decodeEntries(wire.encodeEntries(xs));
     assert.equalInt(decoded.size(), 2);
@@ -27,7 +27,7 @@ fn test_wire_entries_roundtrip(): void {
     assert.equalStr(d0.key, "workloads/web");
     assert.equalStr(d0.value, "name: web\nreplicas: 2");   // colon + newline survive the framing
     assert.isTrue(d0.revision == (7 as long));
-    assert.equalStr(d0.updatedBy, "orchctl");
+    assert.equalStr(d0.updatedBy, "kynatorctl");
     assert.isTrue(d0.updatedAt == (1725000000 as long));
     let d1 = decoded.get(1) ?? config.ConfigEntry("", "", 0);
     assert.equalStr(d1.value, "nodeA|3|1725000123456");
@@ -96,8 +96,8 @@ fn test_snapshot_reload_preserves_revisions(): void {
     let path = "/tmp/kyte_orch_cfgstore_test.snap";
     let _rm = File.remove(path);          // start clean
     let s1 = cfgstore.DurableConfigStore(path);
-    let _1 = s1.putBy("workloads/web", "name: web\nreplicas: 2", "orchctl", 111 as long);
-    let _2 = s1.putBy("leases/orchd", "nodeA|4|900", "system", 0);
+    let _1 = s1.putBy("workloads/web", "name: web\nreplicas: 2", "kynatorctl", 111 as long);
+    let _2 = s1.putBy("leases/kynatord", "nodeA|4|900", "system", 0);
     let _3 = s1.del("workloads/web");     // rev now 3, web gone
     let _4 = s1.putBy("members/nodeA", "10.0.0.1:9000", "system", 0);  // rev 4
     s1.raiseEpoch(4 as long);
@@ -107,7 +107,7 @@ fn test_snapshot_reload_preserves_revisions(): void {
     assert.isTrue(s2.revision() == (4 as long));           // global high-water preserved
     assert.isTrue(s2.writeEpoch == (4 as long));           // fence high-water preserved
     assert.isTrue(s2.get("workloads/web") == undefined);   // the delete persisted
-    let lease = s2.get("leases/orchd") ?? config.ConfigEntry("", "", 0);
+    let lease = s2.get("leases/kynatord") ?? config.ConfigEntry("", "", 0);
     assert.equalStr(lease.value, "nodeA|4|900");
     assert.isTrue(lease.revision == (2 as long));          // per-key revision preserved (not renumbered)
     let mem = s2.get("members/nodeA") ?? config.ConfigEntry("", "", 0);

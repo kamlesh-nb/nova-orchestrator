@@ -3,7 +3,7 @@
 // One YAML document describes everything the control plane needs to run and front an app: the binary
 // and how many replicas to keep (a min/max band), the autoscaler policy, the load-balancer strategy,
 // health probing, network exposure, HTTP routes, and resource limits. It replaces the scattered
-// config (service.json + env vars + code-configured autoscaler): orchd loads these manifests, the
+// config (service.json + env vars + code-configured autoscaler): kynatord loads these manifests, the
 // gateway reads the LB/exposure, and the autoscaler reads its gains — all from here.
 //
 // Parsed with the compiler-generated binder over YAML: `Manifest__bind(source.fromYaml(text))`. Every
@@ -40,7 +40,7 @@ struct Metadata {
 @serializable
 struct Workload {
     pub binary: string,          // native executable to run per replica (a LOCAL path; used when artifact is empty)
-    // Content-addressed binary: "sha256:<hex>". When set, orchd pulls the binary by hash into its blob
+    // Content-addressed binary: "sha256:<hex>". When set, kynatord pulls the binary by hash into its blob
     // cache and runs the verified copy instead of `binary`. This is what the deploy action fills in, so
     // the same manifest names the exact bytes to run. Empty = legacy local-path mode via `binary`.
     pub artifact: string,
@@ -153,7 +153,7 @@ struct Manifest {
     pub routes: List<string>,
     // NOTE: the app's own `config:` section is intentionally NOT modelled here. It is the application's
     // configuration, read by the app itself from the manifest file via the framework loader (web.config).
-    // orchd does not parse or inject it, so serde simply ignores the `config:` key when binding a Manifest.
+    // kynatord does not parse or inject it, so serde simply ignores the `config:` key when binding a Manifest.
     init() {
         self.apiVersion = "kyte/v1";
         self.kind = "App";
@@ -286,7 +286,7 @@ pub fn toYaml(m: Manifest): string {
 // macOS/Windows, veth on Linux), so no host port is advertised.
 pub fn toSpec(m: Manifest): spec.Spec {
     let s = spec.Spec(m.metadata.name, m.workload.binary);
-    s.artifact = m.workload.artifact;      // content-addressed binary (orchd pulls by hash when set)
+    s.artifact = m.workload.artifact;      // content-addressed binary (kynatord pulls by hash when set)
     let i = 0;
     while (i < m.workload.args.size()) { s.args.push(m.workload.args.get(i) ?? ""); i = i + 1; }
     s.restartPolicy = m.workload.restartPolicy;
@@ -303,10 +303,10 @@ pub fn toSpec(m: Manifest): spec.Spec {
     if (string.eql(m.network.expose, "public") && m.network.portBase > 0) {
         s.basePort = m.network.portBase;
         s.portFlag = m.network.portFlag;
-        // NOTE: probePort is deliberately left 0 (no orchd-side HTTP readiness probe). Health/readiness is
+        // NOTE: probePort is deliberately left 0 (no kynatord-side HTTP readiness probe). Health/readiness is
         // the DATA PLANE's job: the `service` load balancer actively health-checks every backend and gates
-        // traffic on it. orchd owns SUPERVISION (process liveness via poll/tryWait, which respawns a
-        // crashed replica). An orchd-side HTTP probe is redundant with the service's checks AND currently
+        // traffic on it. kynatord owns SUPERVISION (process liveness via poll/tryWait, which respawns a
+        // crashed replica). An kynatord-side HTTP probe is redundant with the service's checks AND currently
         // triggers a lang reactor bug (a recycled-coroutine-frame BUS crash in the reactor-native
         // connect/recv path used by httpProbe, reproducible from the reconcile loop; see the driver-parity
         // notes). Re-enable per-workload once that runtime bug is fixed.
@@ -326,13 +326,13 @@ pub fn toSpec(m: Manifest): spec.Spec {
         s.basePort = if (m.network.portBase > 0) m.network.portBase else 8080;
         s.portFlag = if (!string.eql(m.network.portFlag, "")) m.network.portFlag else "--port";
         // probePort left 0: see the note on the public path above (data-plane health checks + supervisor
-        // liveness cover readiness; the orchd HTTP probe is redundant and hits a reactor bug for now).
+        // liveness cover readiness; the kynatord HTTP probe is redundant and hits a reactor bug for now).
     }
     // handoff (mac/win) and loopback leave basePort 0 — the app is reached via the gateway, not a port.
     return s;
 }
 
-// The Spec for the workload's SERVICE (gateway) process — the data-plane side orchd launches alongside
+// The Spec for the workload's SERVICE (gateway) process — the data-plane side kynatord launches alongside
 // the app replicas. It runs the `service` binary at `servicePath` in fd-handoff mode on the SAME
 // rendezvous the apps connect to (/tmp/kyte-<name>.sock), listening on network.servicePort. Run it via a
 // supervisor exactly like an app: the handoff Spec makes the supervisor set KYTE_HANDOFF_SOCK + KYTE_PORT

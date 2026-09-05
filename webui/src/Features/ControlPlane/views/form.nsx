@@ -160,7 +160,7 @@ pub fn manifestForm(sv: cluster.ServiceView, nameLocked: bool, saveLabel: string
         {response.raw(card("Network", grid(selectField("Expose", "expose", opts2("gateway-only", "public")) + numField("Public port base", "portBase") + textField("Port flag", "portFlag"))))}
         <div class="flex items-center gap-3 pt-1">
             <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700">{saveLabel}</button>
-            <span class="text-xs text-slate-400">writes the manifest to the config store; orchd reconciles it</span>
+            <span class="text-xs text-slate-400">writes the manifest to the config store; kynatord reconciles it</span>
         </div>
         {response.raw(routeModal())}
     </form>;

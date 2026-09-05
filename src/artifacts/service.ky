@@ -1,7 +1,7 @@
 // artifacts/service.ky -- the artifact daemon's HTTP surface.
 //
 // Two layers, one guard. Everything is behind a deploy-token check because this endpoint accepts a binary
-// that orchd WILL execute -- the highest-privilege surface in the stack.
+// that kynatord WILL execute -- the highest-privilege surface in the stack.
 //
 // CONTENT layer (sha-addressed blobs -- CI pushes bytes here first):
 //   GET  /artifacts/{sha}/exists   -> 200 present / 404 absent        (CI skips re-uploading an unchanged blob)

@@ -1,6 +1,6 @@
 // orch/artifact.ky -- resolve a workload's content-addressed `artifact` to a local, verified binary.
 //
-// A Spec's `artifact` is "sha256:<hex>". orchd keeps a per-node BlobStore cache; before it can spawn a
+// A Spec's `artifact` is "sha256:<hex>". kynatord keeps a per-node BlobStore cache; before it can spawn a
 // replica it must have that exact blob locally. This module is the seam between the manifest's hash and
 // the supervisor's binaryPath:
 //   - resolveBinary: hash -> a local path if cached, else NotCached (the caller pulls, then retries).

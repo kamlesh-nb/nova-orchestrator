@@ -59,7 +59,7 @@ pub fn nodePanel(node: cluster.NodeView, serviceCount: int): string {
             <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Node information</h3>
             {response.raw(infoRow("Node ID", response.escapeHtml(node.id)))}
             {response.raw(infoRow("Advertise address", response.escapeHtml(node.address)))}
-            {response.raw(infoRow("Role", "control plane (orchd)"))}
+            {response.raw(infoRow("Role", "control plane (kynatord)"))}
             {response.raw(infoRow("Services on the cluster", `${serviceCount}`))}
         </section>
     </div>;

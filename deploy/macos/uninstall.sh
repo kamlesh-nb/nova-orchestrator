@@ -8,7 +8,7 @@ LOG_DIR="${LOG_DIR:-/usr/local/var/log/nova-orchestrator}"
 PURGE=0; [ "${1:-}" = "--purge" ] && PURGE=1
 if [ "$(id -u)" -ne 0 ]; then echo "run as root (sudo)"; exit 1; fi
 
-for label in com.ky.service com.ky.orchd com.ky.artifactd; do
+for label in com.kyte.service com.kyte.kynatord com.kyte.artifactd; do
   launchctl bootout system "/Library/LaunchDaemons/$label.plist" 2>/dev/null || true
   rm -f "/Library/LaunchDaemons/$label.plist"
 done

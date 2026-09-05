@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd daemon for Kyte kynatord. install.sh substitutes @BIN_DIR@/@CONF_DIR@/@DATA_DIR@/@LOG_DIR@.
+     kynatord supervises replicas; it runs as root (LaunchDaemons run as root by default). -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kyte.kynatord</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@BIN_DIR@/kynatord</string>
+        <string>@CONF_DIR@/kynatord.json</string>
+    </array>
+    <key>WorkingDirectory</key><string>@DATA_DIR@</string>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>StandardOutPath</key><string>@LOG_DIR@/kynatord.log</string>
+    <key>StandardErrorPath</key><string>@LOG_DIR@/kynatord.log</string>
+</dict>
+</plist>

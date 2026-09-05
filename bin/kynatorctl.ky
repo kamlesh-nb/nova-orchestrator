@@ -1,14 +1,14 @@
-// orchctl -- the OFFLINE operator CLI for the orchestrator control plane (O3). It works on a config-store
-// BACKUP DUMP FILE (the `key<TAB>value` format `orchd`/the store produce): inspect it, edit cluster
+// kynatorctl -- the OFFLINE operator CLI for the orchestrator control plane (O3). It works on a config-store
+// BACKUP DUMP FILE (the `key<TAB>value` format `kynatord`/the store produce): inspect it, edit cluster
 // membership, and print a rolling-upgrade plan -- the runbook steps that were manual, now scriptable and
-// reviewable BEFORE they touch a live cluster. Live apply is `orchd` + the store; orchctl is the safe
+// reviewable BEFORE they touch a live cluster. Live apply is `kynatord` + the store; kynatorctl is the safe
 // companion that never needs a running btree, so it builds and runs anywhere.
 //
-//   orchctl inspect <file>
-//   orchctl members <file>
-//   orchctl member add <file> <id> <addr>
-//   orchctl member remove <file> <id>
-//   orchctl upgrade-plan <file>
+//   kynatorctl inspect <file>
+//   kynatorctl members <file>
+//   kynatorctl member add <file> <id> <addr>
+//   kynatorctl member remove <file> <id>
+//   kynatorctl upgrade-plan <file>
 import store.config;
 import orch.backup;
 import orch.membership;
@@ -18,7 +18,7 @@ import list;
 import string;
 
 fn usage(): int {
-    console.log("orchctl -- offline orchestrator control-plane tool (operates on a config backup dump)");
+    console.log("kynatorctl -- offline orchestrator control-plane tool (operates on a config backup dump)");
     console.log("  inspect <file>                 count + list keys");
     console.log("  members <file>                 list cluster members");
     console.log("  member add <file> <id> <addr>  add a member (rewrites the file)");

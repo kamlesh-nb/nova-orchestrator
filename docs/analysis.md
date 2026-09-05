@@ -28,8 +28,8 @@ to the plan item that closes the finding.
 | ID | Finding | Severity | Fix | Status |
 |----|---------|----------|-----|--------|
 | F-1 | Live-path CAS not atomic -> split-brain election | CRITICAL | C-T2-1 | FIXED (casBy now issues a single guarded `UPDATE ... WHERE k=? AND revision=?`, an atomic read-modify-write under NovaDB's per-table exclusive lock, once B-3 gave the engine a real guarded UPDATE; the read-then-unguarded-write TOCTOU is gone) |
-| F-2 | Quorum gate is dead code (never called by the lease) | HIGH | C-T2-2 | FIXED (AsyncLeaderLease.tryAcquire now calls hasQuorum(): with members configured, only a registered member with a store-visible majority may take the lease; no members = single-orchd mode, unchanged) |
-| F-3 | HA is a single-store lease, not consensus (framing/doc) | HIGH | doc + single-orchd deployment | open |
+| F-2 | Quorum gate is dead code (never called by the lease) | HIGH | C-T2-2 | FIXED (AsyncLeaderLease.tryAcquire now calls hasQuorum(): with members configured, only a registered member with a store-visible majority may take the lease; no members = single-kynatord mode, unchanged) |
+| F-3 | HA is a single-store lease, not consensus (framing/doc) | HIGH | doc + single-kynatord deployment | open |
 | F-4 | Service VIP bind silently non-functional (binds INADDR_ANY) | HIGH | POLISH (deferrable at medium scale) | FIXED (proxyAcceptLoop now resolves the Service VIP host via bindAddrFor(): a dotted-quad binds that address, empty binds INADDR_ANY, a bad host is reported and falls back loudly) |
 | F-5 | Config validation only partly loud-fail (`?? default`) | MEDIUM | POLISH | open |
 | F-6 | Graceful shutdown has no real grace window | HIGH | C-T1-3 | FIXED (C-T1-3 graceful drain: SIGTERM + wall-clock deadline poll + SIGKILL on overrun) |
@@ -65,7 +65,7 @@ These are ranked by how badly they undermine a promise the stack makes.
 2. **The quorum gate is dead code. HIGH.**
    `membership.quorum()` (`orch/membership.ky:49-52`) is documented as the guard that stops a minority
    partition electing a leader. Neither lease ever calls it: `tryAcquire` (`orch/lease.ky:90`,
-   `orch/asynclease.ky:37`) never consults membership. The only caller is `bin/orchctl.ky:66`, for a status
+   `orch/asynclease.ky:37`) never consults membership. The only caller is `bin/kynatorctl.ky:66`, for a status
    printout. So the advertised split-brain-prevention gate is not wired into the election path.
 
 3. **HA is a single-store lease, not consensus. HIGH (framing).**
@@ -85,7 +85,7 @@ These are ranked by how badly they undermine a promise the stack makes.
 5. **Config validation is only partly loud-fail. MEDIUM.**
    The README promises "a present file with a bad value fails loudly at startup, never silently defaults."
    `validateOrch`/`validateProxy`/`validateStore` are real and do exit 1 with a reason on out-of-range ports,
-   unknown strategies, or a missing backend list (`bin/orchd.ky:55-59`, `bin/service.ky:70`). But the load
+   unknown strategies, or a missing backend list (`bin/kynatord.ky:55-59`, `bin/service.ky:70`). But the load
    path (`cfg/config.ky:98-128, 251-269`) uses `?? default` on every field, so a present-but-wrong-type or
    malformed field silently falls back to its default rather than failing loudly. The loud-fail covers
    semantics and ranges, not type or shape.
@@ -191,7 +191,7 @@ This is a real system, and these parts are good.
   slices (GetTree/GetService/GetNode/NewServiceForm/DeployService/TeardownService) call the real async
   `SqlConfigStore`: deploy validates a manifest then `putBy("workloads/"+name, toYaml(m), "orchweb")`, teardown
   does `del("workloads/"+name)`, reads hit `list("members/")`/`list("workloads/")`. The webui does not itself
-  reconcile; it writes to the same store `orchd` reconciles from, and the loop closes through
+  reconcile; it writes to the same store `kynatord` reconciles from, and the loop closes through
   `asynclease.haReconcileTick` then `nativelet.reconcileFromEntries`. The README claim is accurate.
 
 ## Part 4: the config store, plainly

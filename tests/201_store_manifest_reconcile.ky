@@ -1,5 +1,5 @@
 // 201 -- the store reconcile path is manifest-aware. reconcileFromEntries now sniffs each store value:
-// a declarative YAML Manifest (what the web control plane and orchctl write) is parsed + validated +
+// a declarative YAML Manifest (what the web control plane and kynatorctl write) is parsed + validated +
 // lowered to a Spec exactly like a *.yaml on disk, while a raw JSON Spec ('{'...) still parses as the
 // legacy form. This closes the loop: a manifest a UI writes into the config store under workloads/<name>
 // is understood by the same reconcile machinery that drives the fleet. Complements 191 (JSON rollout

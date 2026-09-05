@@ -35,9 +35,9 @@ fn test_toSpec_maps_manifest_fields(): void {
     // public exposure => port config flows through
     assert.equalInt(s.basePort, 8080);
     assert.equalStr(s.portFlag, "--port");
-    // probePort is deliberately 0: orchd does NOT run its own HTTP readiness probe (redundant with the
+    // probePort is deliberately 0: kynatord does NOT run its own HTTP readiness probe (redundant with the
     // data-plane service's health checks, and it triggered a lang reactor crash). Readiness is the service's
-    // job; orchd owns process-liveness supervision.
+    // job; kynatord owns process-liveness supervision.
     assert.equalInt(s.probePort, 0);
 }
 
@@ -66,7 +66,7 @@ fn test_handoff_off_uses_netns_or_loopback(): void {
 
 @test
 fn test_service_spec_for_handoff_workload(): void {
-    // The service (gateway) Spec orchd launches for a handoff workload: the service binary, one replica,
+    // The service (gateway) Spec kynatord launches for a handoff workload: the service binary, one replica,
     // handoff on the SAME rendezvous as the apps, listening on the front port.
     let m = manifest.parseManifest("metadata:\n  name: shop\nworkload:\n  binary: /bin/shop\nnetwork:\n  servicePort: 8140\n");
     let s = manifest.serviceSpecFor(m, "/opt/kyte/bin/service");

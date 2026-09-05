@@ -7,7 +7,7 @@
 // web framework is binary-safe), so a binary blob round-trips through readText/writeText intact.
 //
 // This is used TWO ways: as the origin store behind the artifact service (artifacts/service.ky), and as
-// each orchd node's local pull cache (orch/artifact.ky). Same type, same guarantees.
+// each kynatord node's local pull cache (orch/artifact.ky). Same type, same guarantees.
 import io.file;
 import io.dir;
 import string;
@@ -49,7 +49,7 @@ pub class BlobStore {
     // The whole blob as a (binary-safe) string, or undefined when absent OR corrupt-on-disk. Content
     // addressing lets us VERIFY on read: the bytes must still hash to their own name, so bit-rot, a
     // truncated file, or an out-of-band tamper is caught here instead of being handed to the supervisor to
-    // exec. (Re-hashing on read is affordable because reads -- an orchd pull or a service GET -- are rare;
+    // exec. (Re-hashing on read is affordable because reads -- an kynatord pull or a service GET -- are rare;
     // the spawn hot path uses has()/localPath(), not get().)
     pub fn get(self: BlobStore, sha: string): string | undefined {
         if (!self.has(sha)) { return undefined; }

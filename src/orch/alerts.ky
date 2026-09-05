@@ -1,7 +1,7 @@
 // orch/alerts.ky -- O5: turn the HealthReport + per-workload statuses into FIRING ALERTS with
 // severities, so a scrape / alertmanager pipeline (or a structured log tail) keys off thresholds instead
 // of a human eyeballing /metrics. Pure data (no I/O), like health.ky, so it renders and tests without a
-// live dependency. orchd evaluates these each reconcile tick, folds them into the /metrics file as
+// live dependency. kynatord evaluates these each reconcile tick, folds them into the /metrics file as
 // orch_alert{...} series, and logs the critical ones.
 import orch.health;
 import orch.nativelet;
@@ -9,7 +9,7 @@ import list;
 import string;
 
 // Firing thresholds. A 0 disables that rule (some signals -- replication lag, reconcile latency -- are
-// only meaningful on an HA node and stay off for a standalone orchd).
+// only meaningful on an HA node and stay off for a standalone kynatord).
 pub struct AlertThresholds {
     pub crashLoopRestarts: int,       // per-workload cumulative restarts at/above which a crash loop fires
     pub replicationLagFrames: long,   // follower frames-behind at/above which lag fires (0 = off)

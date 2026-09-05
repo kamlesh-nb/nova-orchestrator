@@ -1,4 +1,4 @@
-# nova-orchestrator
+# Kynator (the Kyte-native orchestrator)
 
 A native, container-free orchestration stack written in **Kyte** — a Kubernetes-style control plane that
 runs workloads as **native binaries, not containers**. This is an *application package* built on the Kyte
@@ -23,16 +23,16 @@ It bundles the whole I1–I4 infrastructure tier:
 The stack ships as **separate binaries** along the same data-plane / control-plane line Kubernetes draws
 between `kube-proxy` and the controller manager. Each entrypoint lives in `bin/` and pulls only its slice
 of the package through the import graph, so dead-code elimination keeps them genuinely separate. The four
-`bin/` entrypoints are `service`, `orchd`, `orchctl`, and `artifactd`:
+`bin/` entrypoints are `service`, `kynatord`, `kynatorctl`, and `artifactd`:
 
 | Binary | Plane | Owns | Modules |
 |--------|-------|------|---------|
 | **`service`** | data | traffic: L7 reverse proxy, load balancing, health-checked membership, service VIPs | `net.proxy`, `net.service`, `net.autoscale` |
-| **`orchd`**  | control | desired state: manifest reconcile, replica supervision, restart policy, isolation, leader lease, config store, `/metrics` + alerts | `orch.*`, `store.*`, `os.sandbox` |
-| **`orchctl`** | ops | an OFFLINE operator CLI over a config-store backup dump: inspect, edit cluster membership, print a rolling-upgrade plan | `orch.membership`, `orch.backup`, `orch.rollout` |
-| **`artifactd`** | data | the content-addressed blob daemon: a deploy-artifact origin that stores native binaries keyed by their sha256 (idempotent, verified) and serves them by hash to each orchd node before it spawns a replica | `artifacts.blobstore`, `artifacts.registry`, `artifacts.service`, `web.*` |
+| **`kynatord`**  | control | desired state: manifest reconcile, replica supervision, restart policy, isolation, leader lease, config store, `/metrics` + alerts | `orch.*`, `store.*`, `os.sandbox` |
+| **`kynatorctl`** | ops | an OFFLINE operator CLI over a config-store backup dump: inspect, edit cluster membership, print a rolling-upgrade plan | `orch.membership`, `orch.backup`, `orch.rollout` |
+| **`artifactd`** | data | the content-addressed blob daemon: a deploy-artifact origin that stores native binaries keyed by their sha256 (idempotent, verified) and serves them by hash to each kynatord node before it spawns a replica | `artifacts.blobstore`, `artifacts.registry`, `artifacts.service`, `web.*` |
 
-`orchweb` is **not** a `bin/` entrypoint: it is the live, browser-facing sibling of `orchctl`, a WRITABLE
+`orchweb` is **not** a `bin/` entrypoint: it is the live, browser-facing sibling of `kynatorctl`, a WRITABLE
 control-plane UI (a Tailwind web app whose entry point is `webui/src/main.ky`, built via `./build.sh`).
 It presents a node -> service -> replica tree, a service's complete manifest as an editable form, and a
 per-node deploy screen, over `orch.controlplane`, `orch.manifest`, `store.sqlconfig`, and `web.*`. It is
@@ -42,7 +42,7 @@ The sidebar is a tree of cluster nodes (`members/<id>`) -> services (`workloads/
 slots. Clicking a service opens its complete manifest as an editable form; clicking a node opens a deploy
 screen. Navigation is server-rendered hypermedia (links + form POSTs, Tailwind for styling), so there is no
 client state to bind. Every deploy / save / tear down writes a canonical YAML manifest to the SAME config
-store under `workloads/<name>` (or deletes that key); the leader `orchd`'s reconcile loop
+store under `workloads/<name>` (or deletes that key); the leader `kynatord`'s reconcile loop
 (`asynclease.haReconcileTick` -> `nativelet.reconcileFromEntries`, which is manifest-aware) reads exactly
 those keys and converges the fleet. So an action actually spawns, scales, or stops workloads. Connects to
 NovaDB via `KYTE_ORCHWEB_DSN` (default `novadb://admin@127.0.0.1:3009?db=kyte`), seeds the local node
@@ -65,7 +65,7 @@ it means in production:
 They share no process and forward nothing to each other directly. The **only** coupling is a
 service-discovery file, and it is fully wired:
 
-- `orchd` publishes, every reconcile tick, one `name=host:port` line per replica of each workload it
+- `kynatord` publishes, every reconcile tick, one `name=host:port` line per replica of each workload it
   manages (`Nativelet.publishDiscovery`). A workload exposes replica endpoints by setting
   `"service": { "basePort": 9000, "portFlag": "--port" }` in its manifest: replica *i* is spawned on
   `basePort + i` (the port passed via `portFlag`) and advertised on `advertiseHost`. A workload with no
@@ -75,7 +75,7 @@ service-discovery file, and it is fully wired:
   endpoint that is not actually serving yet. So the control plane advertises the desired topology and the
   data plane owns liveness.
 
-Either can run and be restarted independently. End to end: `orchd` writes
+Either can run and be restarted independently. End to end: `kynatord` writes
 `web=127.0.0.1:9000` / `web=127.0.0.1:9001`; a `service` whose config sets `discoveryService: "web"` then
 load-balances across both replicas.
 
@@ -83,11 +83,11 @@ Each reads a **validated JSON config** (a missing file falls back to documented 
 with a bad value fails loudly at startup, never silently defaults):
 
 ```sh
-./build.sh                      # builds build/debug/bin/{service,orchd}  (--release for optimised)
+./build.sh                      # builds build/debug/bin/{service,kynatord}  (--release for optimised)
 
 service service.json              # serve; or `service` (defaults to ./service.json), or SERVICE_CONFIG=...
 service service.json --check      # validate the config and exit 0/1 WITHOUT serving (CI / operator lint)
-orchd  orchd.json               # reconcile loop; ORCHD_CONFIG=... ; orchd --check to lint
+kynatord  kynatord.json               # reconcile loop; ORCHD_CONFIG=... ; kynatord --check to lint
 ```
 
 ### Cross-compiling (host build matrix)
@@ -120,7 +120,7 @@ not accept `windows-arm64` as a `--target` yet (only the five triples above are 
 }
 ```
 
-`orchd.json`:
+`kynatord.json`:
 
 ```json
 { "manifestsDir": "manifests", "reconcileMs": 2000, "nodeId": "node-1", "discoveryFile": "" }
@@ -160,7 +160,7 @@ import os.sandbox;
 ## Usage (programmatic)
 
 The two binaries above are the normal entrypoints. To embed a tier directly, this is exactly what
-`bin/orchd.ky` does (`net.aio` is the async runtime module, formerly `net.asyncio`):
+`bin/kynatord.ky` does (`net.aio` is the async runtime module, formerly `net.asyncio`):
 
 ```kyte
 import orch.nativelet;

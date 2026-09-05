@@ -2,7 +2,7 @@
 //
 // This is the drop-in replacement for the NovaDB-backed SqlConfigStore: SAME method surface and SAME
 // etcd-shaped semantics (monotonic revision, per-key mod-revision, prefix list, CAS on revision, delete,
-// watch-since, a fencing write-epoch), so orch/asynclease.ky and orchd wire against it unchanged. The
+// watch-since, a fencing write-epoch), so orch/asynclease.ky and kynatord wire against it unchanged. The
 // difference is only the transport -- a request to artifactd's /cfg/* routes instead of SQL over the db
 // seam -- which is why removing NovaDB touched no lease logic.
 //
@@ -63,7 +63,7 @@ pub struct HttpConfigStore {
     }
 
     // The artifactd store self-initialises (and reloads its snapshot on start), so there is no schema to
-    // create -- kept for surface-compatibility with the old SQL path (orchd awaits it once at startup).
+    // create -- kept for surface-compatibility with the old SQL path (kynatord awaits it once at startup).
     pub async fn ensureSchema(self: HttpConfigStore): void {
         let _ = await self.ping();
     }

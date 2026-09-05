@@ -1,4 +1,4 @@
-// 187 — orchd (nativelet) launches each handoff workload's SERVICE alongside its apps. reconcile expands
+// 187 — kynatord (nativelet) launches each handoff workload's SERVICE alongside its apps. reconcile expands
 // a handoff app `web` into `web` + `web-svc` (the gateway on the same rendezvous), managed by the same
 // reconcile machinery. Simulated (virtual replicas) — no real processes.
 import assert;
@@ -26,7 +26,7 @@ fn test_handoff_workload_gets_a_service_job(): void {
     n.reconcileWith(desired);
 
     assert.isTrue(n.findJobIdx("web") >= 0);           // the app workload
-    assert.isTrue(n.findJobIdx("web-svc") >= 0);       // its companion service, launched by orchd
+    assert.isTrue(n.findJobIdx("web-svc") >= 0);       // its companion service, launched by kynatord
     assert.equalInt(n.desiredReplicas("web-svc"), 1);  // one service replica
 }
 

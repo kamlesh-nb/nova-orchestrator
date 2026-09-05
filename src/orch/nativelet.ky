@@ -30,7 +30,7 @@ const ROLL_GRACE_TICKS = 4;
 // T1-4 torn-free write: write to a sibling temp file, then rename over the target. rename(2) is atomic
 // within a filesystem (temp and target share the directory, hence the filesystem), so a concurrent reader
 // on the data plane sees either the old discovery file or the complete new one, never a half-written file
-// that would momentarily drop backends. One writer per file (the single orchd reconcile loop), so a fixed
+// that would momentarily drop backends. One writer per file (the single kynatord reconcile loop), so a fixed
 // ".tmp" suffix cannot collide.
 fn atomicWriteText(path: string, content: string): void {
     let tmp = path + ".tmp";
@@ -251,7 +251,7 @@ pub struct Nativelet {
     //
     // A store value is one of two forms, sniffed by its first non-space character (mirroring scan()'s
     // file-extension split, since a store value has no filename):
-    //   - a declarative YAML Manifest (the default the web control plane / orchctl write) -- parsed via
+    //   - a declarative YAML Manifest (the default the web control plane / kynatorctl write) -- parsed via
     //     manifest.parseManifest, validated, and lowered to a Spec by manifest.toSpec; this is the primary
     //     form, keeping the manifest the single source of truth on the store path too, not only on disk;
     //   - a raw JSON Spec starting with '{' (the legacy store form, still honoured for older stores).
@@ -471,7 +471,7 @@ async fn httpProbe(host: string, port: int, path: string, tmo: int): bool {
     // asyncConnect returns a REACTOR-NATIVE stream (kq set, sock = raw fd), and its methods route through
     // net/reactorio; crucially s.close() DEREGISTERS the fd from the reactor. The old code closed the fd
     // with a raw aclose(s.sock) that left the reactor registration dangling, so a later completion/event
-    // for that fd resumed an already-freed coroutine frame -> a garbage-handle resume that crashed orchd
+    // for that fd resumed an already-freed coroutine frame -> a garbage-handle resume that crashed kynatord
     // (BUS) within a few probe ticks of supervising a workload.
     let s = await aio.asyncConnect(host, port);
     if (!s.ok()) { return false; }
