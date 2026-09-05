@@ -1,0 +1,73 @@
+// orchweb -- the web control plane of the orchestrator stack, as a standard Kyte web app (`kyte init web`
+// layout: static wwwroot/index.html shell + vertical-slice Features + a composition root). It is the
+// writable, browser-facing operator surface: a Tailwind + Datastar dashboard whose sidebar is a collapsible
+// tree of nodes -> services -> replica slots. Clicking a service loads its complete manifest as an editable
+// form; clicking a node loads its info + a deploy screen. Every deploy / teardown writes a manifest to the
+// SAME NovaDB config store orchd reconciles from, so the fleet actually changes.
+//
+// The shell (wwwroot/index.html) is static and served via useStatic; each slice's handler returns a Datastar
+// SSE fragment that the shell morphs into #tree / #detail / #toast. Handlers are discovered by their
+// RequestHandler impls; importing each makes it discoverable, and its ControlPlane dependency is injected.
+//
+//   orchweb   # KYTE_ORCHWEB_DSN (default novadb://admin@127.0.0.1:3009?db=kyte),
+//             # KYTE_ORCHWEB_NODE (default node-1), KYTE_PORT (default 8130)
+import web.app;
+import web.request;
+import web.response;
+import web.routing;
+import web.mediator;
+import string;
+import env;
+import Features.ControlPlane.Shared.store;
+import Features.ControlPlane.GetTree.query;
+import Features.ControlPlane.GetTree.handler;
+import Features.ControlPlane.GetService.query;
+import Features.ControlPlane.GetService.handler;
+import Features.ControlPlane.GetNode.query;
+import Features.ControlPlane.GetNode.handler;
+import Features.ControlPlane.NewServiceForm.query;
+import Features.ControlPlane.NewServiceForm.handler;
+import Features.ControlPlane.DeployService.command;
+import Features.ControlPlane.DeployService.handler;
+import Features.ControlPlane.TeardownService.command;
+import Features.ControlPlane.TeardownService.handler;
+
+fn configureServices(dsn: string, nodeId: string, advertise: string): ServiceCollection {
+    let services = ServiceCollection();
+    services.addSingleton("ControlPlane", (sp) => { return store.ControlPlane(dsn, nodeId, advertise); });
+    return services;
+}
+
+fn buildApp(dsn: string, nodeId: string, advertise: string): App {
+    let app = App();
+    app.useServices(configureServices(dsn, nodeId, advertise));
+
+    // Mediator-dispatched routes (opt-in after the web realign): the handlers stay
+    // RequestHandler impls resolved from DI (useServices above), so `mediated<TReq>` is
+    // the routing shape, not the direct RouteHandler verb methods.
+    app.mediated<GetTree>("GET", "/api/tree");
+    app.mediated<GetService>("GET", "/api/services/{name}");
+    app.mediated<GetNode>("GET", "/api/nodes/{id}");
+    app.mediated<NewServiceForm>("GET", "/api/nodes/{id}/new");
+    app.mediated<DeployService>("POST", "/api/services");
+    app.mediated<TeardownService>("POST", "/api/services/{name}/teardown");
+
+    app.useStatic("/", "./wwwroot");
+    return app;
+}
+
+fn main(): void {
+    let dsn = env.get("KYTE_ORCHWEB_DSN");
+    if (string.eql(dsn, "")) { dsn = "novadb://admin@127.0.0.1:3009?db=kyte"; }
+    let nodeId = env.get("KYTE_ORCHWEB_NODE");
+    if (string.eql(nodeId, "")) { nodeId = "node-1"; }
+    let advertise = env.get("KYTE_ORCHWEB_ADVERTISE");
+    if (string.eql(advertise, "")) { advertise = "127.0.0.1"; }
+    let port = 8130;
+    let pe = env.get("KYTE_PORT");
+    if (!string.eql(pe, "")) { port = string.parseI64(pe) as int; }
+
+    let app = buildApp(dsn, nodeId, advertise);
+    console.log(`orchweb: control plane on http://127.0.0.1:${port} (store ${dsn})`);
+    app.run(port);
+}

@@ -8,9 +8,9 @@
 #
 # Each entrypoint lives in bin/ and pulls only its slice of the package via the import graph, so the
 # binaries are naturally separated (dead-code elimination drops the unreferenced tier). Run from a
-# checkout beside the `lang` toolchain (nova on PATH). Pass --release for an optimised build.
+# checkout beside the `lang` toolchain (kyte on PATH). Pass --release for an optimised build.
 #
-# CROSS-COMPILING (host build matrix): pass --target <triple> to build for another OS/arch. The nova
+# CROSS-COMPILING (host build matrix): pass --target <triple> to build for another OS/arch. The kyte
 # toolchain cross-compiles from any host (macOS, Windows, WSL/Linux). Supported triples:
 #   --target linux-x86_64     Linux x86_64
 #   --target linux-arm64      Linux aarch64
@@ -20,8 +20,8 @@
 #   --target windows-arm64    Windows aarch64 (produces .exe)
 # Cross binaries land in build/<profile>/<triple>/bin/. Example: ./build.sh --release --target linux-arm64
 #
-# Native builds use `nova build` (the fast per-file object cache under build/<profile>/obj). Cross builds
-# use nova's single-file compile mode instead: the build-mode object cache is not target-aware, so mixing
+# Native builds use `kyte build` (the fast per-file object cache under build/<profile>/obj). Cross builds
+# use kyte's single-file compile mode instead: the build-mode object cache is not target-aware, so mixing
 # a native build and a cross build in the same profile dir collides (duplicate symbols at link time).
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -44,7 +44,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# Per-binary build. Native = `nova build --file` (cached); cross = single-file compile with --target.
+# Per-binary build. Native = `kyte build --file` (cached); cross = single-file compile with --target.
 ext=""
 if [ -n "$target" ]; then
   case "$target" in
@@ -57,31 +57,31 @@ else
   outdir="build/$profile/bin"
 fi
 
-build_one() { # $1 = name, $2 = source .nova
+build_one() { # $1 = name, $2 = source .ky
   local name="$1" src="$2"
   if [ -n "$target" ]; then
-    nova "$src" -o "$outdir/$name$ext" $profile_flag --target "$target" >/dev/null
+    kyte "$src" -o "$outdir/$name$ext" $profile_flag --target "$target" >/dev/null
   else
-    nova build --file "$src" -o "$outdir/$name" $profile_flag >/dev/null
+    kyte build --file "$src" -o "$outdir/$name" $profile_flag >/dev/null
   fi
 }
 
 mkdir -p "$outdir"
 echo "Building service (data plane)...${target:+ [target=$target]}"
-build_one service bin/service.nova
+build_one service bin/service.ky
 echo "Building orchd (control plane)...${target:+ [target=$target]}"
-build_one orchd bin/orchd.nova
+build_one orchd bin/orchd.ky
 echo "Building orchctl (operator CLI)...${target:+ [target=$target]}"
-build_one orchctl bin/orchctl.nova
+build_one orchctl bin/orchctl.ky
 echo "Building artifactd (blob origin)...${target:+ [target=$target]}"
-build_one artifactd bin/artifactd.nova
+build_one artifactd bin/artifactd.ky
 # orchweb is the OPTIONAL control-plane UI; its sources live under webui/ (a work-in-progress tree). Build
 # it best-effort so a missing or not-yet-building webui never fails the core stack (service/orchd/orchctl),
 # which is what the platform slice and the acceptance test actually depend on.
 orchweb_built=0
-if [ -f webui/src/main.nova ]; then
+if [ -f webui/src/main.ky ]; then
     echo "Building orchweb (control-plane UI, best-effort)...${target:+ [target=$target]}"
-    if build_one orchweb webui/src/main.nova 2>/dev/null; then
+    if build_one orchweb webui/src/main.ky 2>/dev/null; then
         orchweb_built=1
     else
         echo "  warning: orchweb skipped (webui not currently building)"

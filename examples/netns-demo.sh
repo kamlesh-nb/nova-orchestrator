@@ -4,7 +4,7 @@
 # server INSIDE the namespace, and prove it is reachable ONLY through the host veth address -- not on any
 # host interface. This is the Linux implementation of `network.expose: gateway-only`.
 set -u
-NS=nova-demo
+NS=kyte-demo
 HOSTIF=nvh0
 APPIF=nva0
 HOSTIP=10.66.0.1

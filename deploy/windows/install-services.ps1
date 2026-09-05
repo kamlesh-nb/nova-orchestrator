@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Install the Nova orchestrator daemons (artifactd, orchd, service) so they run at boot on Windows.
+  Install the Kyte orchestrator daemons (artifactd, orchd, service) so they run at boot on Windows.
 
 .DESCRIPTION
   The daemons are console programs, which Windows cannot run as native services directly (a service must
@@ -87,9 +87,9 @@ if (-not (Test-Path $serviceCfg)) {
 # Per-daemon definition: name, exe, args, environment.
 $artRoot = (Join-Path $DataDir "artifacts")
 $daemons = @(
-  @{ Name="nova-artifactd"; Exe=(Join-Path $BinDir "artifactd.exe"); Args=@();            Env=@{ NOVA_ARTIFACT_ROOT=$artRoot; NOVA_PORT="8135"; NOVA_ARTIFACT_TOKEN="" } },
-  @{ Name="nova-orchd";     Exe=(Join-Path $BinDir "orchd.exe");     Args=@($orchdCfg);   Env=@{} },
-  @{ Name="nova-service";   Exe=(Join-Path $BinDir "service.exe");   Args=@($serviceCfg); Env=@{} }
+  @{ Name="kyte-artifactd"; Exe=(Join-Path $BinDir "artifactd.exe"); Args=@();            Env=@{ KYTE_ARTIFACT_ROOT=$artRoot; KYTE_PORT="8135"; KYTE_ARTIFACT_TOKEN="" } },
+  @{ Name="kyte-orchd";     Exe=(Join-Path $BinDir "orchd.exe");     Args=@($orchdCfg);   Env=@{} },
+  @{ Name="kyte-service";   Exe=(Join-Path $BinDir "service.exe");   Args=@($serviceCfg); Env=@{} }
 )
 
 function Install-Nssm($d) {
@@ -125,9 +125,9 @@ foreach ($d in $daemons) {
 
 Write-Host ""
 if ($Method -eq "Nssm") {
-  Write-Host "Installed as Windows services. Manage with: sc.exe {start|stop|query} nova-artifactd (or services.msc)."
+  Write-Host "Installed as Windows services. Manage with: sc.exe {start|stop|query} kyte-artifactd (or services.msc)."
 } else {
-  Write-Host "Installed as Scheduled Tasks (run at startup as SYSTEM). Manage with: schtasks /Query /TN nova-orchd, or Task Scheduler."
+  Write-Host "Installed as Scheduled Tasks (run at startup as SYSTEM). Manage with: schtasks /Query /TN kyte-orchd, or Task Scheduler."
 }
 Write-Host "Binaries: $BinDir   Config: $ConfDir   Data: $DataDir"
-Write-Host "Put the artifactd deploy token in the service/task env (NOVA_ARTIFACT_TOKEN) for production."
+Write-Host "Put the artifactd deploy token in the service/task env (KYTE_ARTIFACT_TOKEN) for production."

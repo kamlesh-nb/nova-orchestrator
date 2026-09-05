@@ -1,5 +1,5 @@
 <#
-.SYNOPSIS  Remove the Nova orchestrator services / scheduled tasks installed by install-services.ps1.
+.SYNOPSIS  Remove the Kyte orchestrator services / scheduled tasks installed by install-services.ps1.
 .PARAMETER Nssm   Path to nssm.exe (if the services were installed with NSSM and it is not on PATH).
 .PARAMETER Purge  Also delete the config + data directories.
 #>
@@ -18,7 +18,7 @@ if (-not (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Securit
 }
 if (-not $Nssm) { $c = Get-Command nssm.exe -ErrorAction SilentlyContinue; if ($c) { $Nssm = $c.Source } }
 
-foreach ($name in "nova-service","nova-orchd","nova-artifactd") {
+foreach ($name in "kyte-service","kyte-orchd","kyte-artifactd") {
   # Try NSSM service first, then Scheduled Task -- either may exist.
   $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
   if ($svc) {

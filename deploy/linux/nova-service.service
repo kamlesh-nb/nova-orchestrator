@@ -1,16 +1,16 @@
 [Unit]
-Description=Nova service (data-plane gateway: L7 proxy / load balancer, fd-handoff)
+Description=Kyte service (data-plane gateway: L7 proxy / load balancer, fd-handoff)
 Documentation=https://github.com/kamlesh-nb/nova-orchestrator
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=nova
-Group=nova
-# service [config.json]  -- default service.json, or set SERVICE_CONFIG. NOVA_PORT overrides the port.
-# In fd-handoff mode the app replicas connect to an AF_UNIX rendezvous at /tmp/nova-service.sock
-# (override with NOVA_HANDOFF_SOCK). Do NOT set PrivateTmp=true here: it would give service a private
+User=kyte
+Group=kyte
+# service [config.json]  -- default service.json, or set SERVICE_CONFIG. KYTE_PORT overrides the port.
+# In fd-handoff mode the app replicas connect to an AF_UNIX rendezvous at /tmp/kyte-service.sock
+# (override with KYTE_HANDOFF_SOCK). Do NOT set PrivateTmp=true here: it would give service a private
 # /tmp and the replicas could no longer reach that socket. Keep the rendezvous path short (sun_path caps
 # at ~108 bytes) -- see the orchestrator CLAUDE.md.
 ExecStart=/opt/nova-orchestrator/bin/service /etc/nova-orchestrator/service.json

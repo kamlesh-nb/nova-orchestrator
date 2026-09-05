@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Remove the Nova orchestrator launchd daemons + binaries. Leaves config/data/logs unless --purge.
+# Remove the Kyte orchestrator launchd daemons + binaries. Leaves config/data/logs unless --purge.
 set -euo pipefail
 BIN_DIR="${BIN_DIR:-/usr/local/opt/nova-orchestrator/bin}"
 CONF_DIR="${CONF_DIR:-/usr/local/etc/nova-orchestrator}"
@@ -8,7 +8,7 @@ LOG_DIR="${LOG_DIR:-/usr/local/var/log/nova-orchestrator}"
 PURGE=0; [ "${1:-}" = "--purge" ] && PURGE=1
 if [ "$(id -u)" -ne 0 ]; then echo "run as root (sudo)"; exit 1; fi
 
-for label in com.nova.service com.nova.orchd com.nova.artifactd; do
+for label in com.ky.service com.ky.orchd com.ky.artifactd; do
   launchctl bootout system "/Library/LaunchDaemons/$label.plist" 2>/dev/null || true
   rm -f "/Library/LaunchDaemons/$label.plist"
 done

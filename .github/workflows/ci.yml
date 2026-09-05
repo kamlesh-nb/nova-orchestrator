@@ -1,25 +1,25 @@
 name: CI
 
-# The orchestrator (service / orchd / orchctl / artifactd) is NOVA code, so unlike nls it needs a built
-# `nova` on PATH -- which means building the lang toolchain (with LLVM) first. Its test harness also
+# The orchestrator (service / orchd / orchctl / artifactd) is KYTE code, so unlike nls it needs a built
+# `kyte` on PATH -- which means building the lang toolchain (with LLVM) first. Its test harness also
 # assumes the monorepo layout (run-tests.sh uses ../../lang and resolves packages through ../packages),
 # so CI reconstructs that layout by checking out three repos into fixed paths:
 #
-#   lang/                        <- kamlesh-nb/nova   (the compiler; built here, installs `nova`)
+#   lang/                        <- kamlesh-nb/nova   (the compiler; built here, installs `kyte`)
 #   packages/nova-orchestrator/  <- this repo
 #   packages/nova-novadb/        <- kamlesh-nb/nova-novadb  (the `import novadb` driver the store uses)
 #
 # SCOPE -- CORE ONLY. build.sh builds service/orchd/orchctl/artifactd and skips orchweb best-effort;
-# the test step runs tests/*.nova only. The orchweb UI and webui/tests are EXCLUDED because they
+# the test step runs tests/*.ky only. The orchweb UI and webui/tests are EXCLUDED because they
 # `import datastar`, and nova-datastar is a gitignored, vendored package with no upstream repo to check
-# out here. Publish/vendor datastar to extend this gate to the UI. The opt-in NOVA_LIVE HA tests (real
+# out here. Publish/vendor datastar to extend this gate to the UI. The opt-in KYTE_LIVE HA tests (real
 # NovaDB round-trips) are also out of scope -- CI stays offline and server-free.
 #
 # Linux only (x86_64 + arm64): the orchestrator is a Linux production concern -- its zero-downtime
 # fd-handoff is AF_UNIX/SCM_RIGHTS (POSIX-only by design) and it targets Linux deployment. macOS and
 # Windows are not gated here.
 #
-# If `nova`/`nova-novadb` are private, set NOVA_TOKEN to a PAT with read access (falls back to
+# If `kyte`/`nova-novadb` are private, set KYTE_TOKEN to a PAT with read access (falls back to
 # GITHUB_TOKEN, which works when the repos share an owner and it is permitted).
 
 on:
@@ -48,12 +48,12 @@ jobs:
         with:
           repository: kamlesh-nb/nova
           path: lang
-          token: ${{ secrets.NOVA_TOKEN || github.token }}
+          token: ${{ secrets.KYTE_TOKEN || github.token }}
       - uses: actions/checkout@v4
         with:
           repository: kamlesh-nb/nova-novadb
           path: packages/nova-novadb
-          token: ${{ secrets.NOVA_TOKEN || github.token }}
+          token: ${{ secrets.KYTE_TOKEN || github.token }}
 
       - uses: mlugg/setup-zig@v2
         with: { version: 0.16.0 }
@@ -80,22 +80,22 @@ jobs:
           sudo apt-get install -y llvm-21-dev libclang-21-dev clang-21 zlib1g-dev libzstd-dev libxml2-dev liblzma-dev
           cp -u /var/cache/apt/archives/*.deb ~/apt-llvm-cache/ 2>/dev/null || true
           sudo ln -sf "$(command -v clang++-21)" /usr/local/bin/clang++
-          echo "NOVA_LLVM_PREFIX=/usr/lib/llvm-21" >> "$GITHUB_ENV"
+          echo "KYTE_LLVM_PREFIX=/usr/lib/llvm-21" >> "$GITHUB_ENV"
           /usr/lib/llvm-21/bin/llvm-config --version
 
-      # ReleaseFast: a Debug nova's leak gate exits 1 on every `nova build`/`nova test`, which would fail
-      # build.sh and the test loop while printing a pass. Installs `nova` to ~/.nova/bin.
-      - name: Build the Nova toolchain (ReleaseFast)
+      # ReleaseFast: a Debug kyte's leak gate exits 1 on every `kyte build`/`kyte test`, which would fail
+      # build.sh and the test loop while printing a pass. Installs `kyte` to ~/.kyte/bin.
+      - name: Build the Kyte toolchain (ReleaseFast)
         working-directory: lang
         run: zig build -Doptimize=ReleaseFast
 
       - name: Build orchestrator core (service/orchd/orchctl/artifactd; orchweb skipped best-effort)
         working-directory: packages/nova-orchestrator
         run: |
-          export PATH="$HOME/.nova/bin:$PATH"
+          export PATH="$HOME/.kyte/bin:$PATH"
           ./build.sh
 
-      # Core offline suite only (tests/*.nova). run-tests.sh also globs webui/tests, which need datastar;
+      # Core offline suite only (tests/*.ky). run-tests.sh also globs webui/tests, which need datastar;
       # we mirror its per-test logic here minus that glob. Run from lang/ so `../packages` resolves.
       #
       # 183_isolation_sandbox is SKIPPED here and run as root in the next step: level1 asks for
@@ -104,18 +104,18 @@ jobs:
       # degrade to a plain spawn on Linux (that fallback is the non-Linux branch of io.cpp). Failing
       # closed is the right behaviour for a security boundary, so the test is given privileges rather
       # than the sandbox being made to fail open.
-      - name: Core tests (tests/*.nova, unprivileged)
+      - name: Core tests (tests/*.ky, unprivileged)
         shell: bash
         run: |
-          export PATH="$HOME/.nova/bin:$PATH"
+          export PATH="$HOME/.kyte/bin:$PATH"
           cd lang
           ORCH="$GITHUB_WORKSPACE/packages/nova-orchestrator"
           pass=0; fail=0
-          for t in "$ORCH"/tests/*.nova; do
+          for t in "$ORCH"/tests/*.ky; do
             case "$(basename "$t")" in
-              183_isolation_sandbox.nova) echo "SKIP  $(basename "$t")  (root step below)"; continue ;;
+              183_isolation_sandbox.ky) echo "SKIP  $(basename "$t")  (root step below)"; continue ;;
             esac
-            if nova test "$t" >/tmp/orch.log 2>&1 && grep -q "0 failed" /tmp/orch.log; then
+            if kyte test "$t" >/tmp/orch.log 2>&1 && grep -q "0 failed" /tmp/orch.log; then
               echo "PASS  $(basename "$t")"; pass=$((pass+1))
             else
               echo "::error::FAIL $(basename "$t")"; tail -8 /tmp/orch.log; fail=$((fail+1))
@@ -125,30 +125,30 @@ jobs:
           echo "orchestrator core: $pass passed, $fail failed"
           [ "$fail" -eq 0 ]
 
-      # `sudo -E` is NOT sufficient: sudoers' secure_path overrides PATH regardless, so `nova` is not
-      # found, and a reset HOME makes the compiler miss ~/.nova (stdlib + runtime archive) and fail
+      # `sudo -E` is NOT sufficient: sudoers' secure_path overrides PATH regardless, so `kyte` is not
+      # found, and a reset HOME makes the compiler miss ~/.kyte (stdlib + runtime archive) and fail
       # while merely *reading* its own files. Both are therefore passed explicitly through `env`.
       #
       # Runs AFTER the unprivileged suite on purpose. Several tests use fixed /tmp paths
-      # (204_artifacts writes /tmp/nova_artifacts_test), so anything root creates is undeletable by
+      # (204_artifacts writes /tmp/kyte_artifacts_test), so anything root creates is undeletable by
       # the runner user afterwards; going root-last, and cleaning up, keeps the ordering safe if more
       # steps are added below.
       - name: Isolation test (183, needs CAP_SYS_ADMIN)
         shell: bash
         run: |
-          export PATH="$HOME/.nova/bin:$PATH"
+          export PATH="$HOME/.kyte/bin:$PATH"
           cd lang
           ORCH="$GITHUB_WORKSPACE/packages/nova-orchestrator"
           rc=0
           sudo env "PATH=$PATH" "HOME=$HOME" \
-            nova test "$ORCH/tests/183_isolation_sandbox.nova" >/tmp/orch183.log 2>&1 \
+            kyte test "$ORCH/tests/183_isolation_sandbox.ky" >/tmp/orch183.log 2>&1 \
             && grep -q "0 failed" /tmp/orch183.log || rc=1
           if [ "$rc" -eq 0 ]; then
-            echo "PASS  183_isolation_sandbox.nova (root)"
+            echo "PASS  183_isolation_sandbox.ky (root)"
           else
-            echo "::error::FAIL 183_isolation_sandbox.nova (root)"; tail -12 /tmp/orch183.log
+            echo "::error::FAIL 183_isolation_sandbox.ky (root)"; tail -12 /tmp/orch183.log
           fi
-          sudo find /tmp -maxdepth 1 -user root -name 'nova*' -exec rm -rf {} + 2>/dev/null || true
+          sudo find /tmp -maxdepth 1 -user root -name 'kyte*' -exec rm -rf {} + 2>/dev/null || true
           exit "$rc"
 
       # Build the RELEASE binaries and archive them as downloadable artifacts. Runs only after the build
@@ -159,7 +159,7 @@ jobs:
       - name: Build + archive release binaries
         working-directory: packages/nova-orchestrator
         run: |
-          export PATH="$HOME/.nova/bin:$PATH"
+          export PATH="$HOME/.kyte/bin:$PATH"
           ./build.sh --release
           mkdir -p out
           base="nova-orchestrator-${{ matrix.name }}"

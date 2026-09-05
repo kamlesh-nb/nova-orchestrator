@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the Nova orchestrator daemons (artifactd, orchd, service) as launchd system daemons on macOS.
+# Install the Kyte orchestrator daemons (artifactd, orchd, service) as launchd system daemons on macOS.
 #
 # Layout (override with env vars):
 #   BIN_DIR   /usr/local/opt/nova-orchestrator/bin
@@ -42,7 +42,7 @@ echo "==> Seeding config templates (only if absent)"
 [ -f "$CONF_DIR/service.json" ] || printf '{\n  "listenHost": "0.0.0.0", "listenPort": 8090, "strategy": "roundrobin",\n  "health": { "enabled": true, "path": "/healthz", "intervalMs": 2000, "timeoutMs": 1000, "rise": 2, "fall": 3 },\n  "backends": []\n}\n' > "$CONF_DIR/service.json"
 
 echo "==> Installing launchd plists (substituting paths)"
-for label in com.nova.artifactd com.nova.orchd com.nova.service; do
+for label in com.ky.artifactd com.ky.orchd com.ky.service; do
   sed -e "s#@BIN_DIR@#$BIN_DIR#g" -e "s#@CONF_DIR@#$CONF_DIR#g" -e "s#@DATA_DIR@#$DATA_DIR#g" -e "s#@LOG_DIR@#$LOG_DIR#g" \
       "$here/$label.plist" > "/Library/LaunchDaemons/$label.plist"
   chown root:wheel "/Library/LaunchDaemons/$label.plist"
@@ -51,13 +51,13 @@ done
 
 if [ "$DO_LOAD" = 1 ]; then
   echo "==> Bootstrapping daemons"
-  for label in com.nova.artifactd com.nova.orchd com.nova.service; do
+  for label in com.ky.artifactd com.ky.orchd com.ky.service; do
     launchctl bootout system "/Library/LaunchDaemons/$label.plist" 2>/dev/null || true
     launchctl bootstrap system "/Library/LaunchDaemons/$label.plist"
     launchctl enable "system/$label"
   done
-  launchctl print system/com.nova.orchd 2>/dev/null | sed -n '1,12p' || true
+  launchctl print system/com.ky.orchd 2>/dev/null | sed -n '1,12p' || true
 fi
 
-echo "Done. Manage with: sudo launchctl {bootstrap,bootout} system /Library/LaunchDaemons/com.nova.<c>.plist"
+echo "Done. Manage with: sudo launchctl {bootstrap,bootout} system /Library/LaunchDaemons/com.ky.<c>.plist"
 echo "Logs in $LOG_DIR ; config in $CONF_DIR (restart a daemon after editing: bootout then bootstrap)."

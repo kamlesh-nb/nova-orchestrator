@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Remove the Nova orchestrator systemd units + binaries. Leaves CONF_DIR and DATA_DIR by default
+# Remove the Kyte orchestrator systemd units + binaries. Leaves CONF_DIR and DATA_DIR by default
 # (pass --purge to delete config + data too).
 set -euo pipefail
 BIN_DIR="${BIN_DIR:-/opt/nova-orchestrator/bin}"
@@ -9,7 +9,7 @@ PURGE=0
 [ "${1:-}" = "--purge" ] && PURGE=1
 if [ "$(id -u)" -ne 0 ]; then echo "run as root (sudo)"; exit 1; fi
 
-for u in nova-service nova-orchd nova-artifactd; do
+for u in kyte-service kyte-orchd kyte-artifactd; do
   systemctl stop "$u.service" 2>/dev/null || true
   systemctl disable "$u.service" 2>/dev/null || true
   rm -f "/etc/systemd/system/$u.service"

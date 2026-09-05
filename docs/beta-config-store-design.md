@@ -48,7 +48,7 @@ Three coupled deliverables:
 > UPDATE (2026-08-02): this section is the ORIGINAL baseline. Much of it has since advanced -- see the
 > per-phase STATUS notes in section 4 for the current truth. In short: config is no longer file-only (P1
 > ConfigStore + SqlConfigStore over a live btree, reconcile reads from the store); a leader/standby lease
-> with a fencing epoch exists (P3, orch/lease.nova); and the btree replication follower/apply side is
+> with a fencing epoch exists (P3, orch/lease.ky); and the btree replication follower/apply side is
 > built and tested (R1 apply + R2 fencing over sockets + R2 store-side write fencing + R3 quorum-ack),
 > not "ship side only" as the BTreeDB paragraph below states. Still NOT done: lifecycle-wiring the follower
 > into db/server startup, live multi-node runs, and all of P6-P8 (security, operability, chaos).
@@ -110,7 +110,7 @@ low-volume and a single leader with hot standbys is enough for Beta and matches 
   Beta, leader election can be simple (a configured priority list + a lease/lock row, or an operator-set
   leader) rather than full consensus; document the failure modes.
 
-### Config-store API (the etcd-shaped seam, in Nova, in the orchestrator package)
+### Config-store API (the etcd-shaped seam, in Kyte, in the orchestrator package)
 - `put(key, value) -> revision`  (leader only; goes through the BTreeDB driver on the async DB seam)
 - `get(key) -> (value, revision) | none`
 - `list(prefix) -> [(key, value, revision)]`
@@ -136,12 +136,12 @@ the store), not the source of truth.
   every OBSERVED-acked row survives, clean recovery). Both PASS. Note found + fixed: the old harness parsed
   SELECT COUNT(*), which the SQL parser rejects (no aggregates) -- verification is now by point-lookup. (3)
   Live config-store suite 3/3 with sync-commit on.
-- P1 Config-store layer (single node, no replication yet): the KV/config table + the Nova config-store
+- P1 Config-store layer (single node, no replication yet): the KV/config table + the Kyte config-store
   API over the existing BTreeDB async driver seam. Orchestrator reads desired state from the store; the
   manifest dir becomes a bootstrap importer. Gate: reconcile works entirely from the store on one node.
   STATUS (2026-08-02): the etcd-shaped API exists in TWO forms, both offline-tested:
-  (a) `src/store/config.nova` -- in-memory ConfigStore reference/oracle (test 184, 5 cases);
-  (b) `src/store/sqlconfig.nova` -- SqlConfigStore, the async SQL-backed path over the data.db Connection
+  (a) `src/store/config.ky` -- in-memory ConfigStore reference/oracle (test 184, 5 cases);
+  (b) `src/store/sqlconfig.ky` -- SqlConfigStore, the async SQL-backed path over the data.db Connection
   seam (config + config_meta tables; put = upsert, cas = check-then-bump, list/watch = scan + filter),
   tested against a FakeConn that simulates the tables (test 185, 5 cases; a sync @test block-drives the
   async methods).
@@ -150,7 +150,7 @@ the store), not the source of truth.
   and the manifest dir is an optional bootstrap importer (test 186: start/replace/drop/prefix-isolation/
   stop-all/keep-on-empty, 2 cases). The daemon does the async store fetch and passes entries in, so it
   works with either ConfigStore (sync) or SqlConfigStore (async).
-  P1 GATE MET (2026-08-02): tests/live/187_sqlconfig_live.nova runs the full API + store-driven reconcile
+  P1 GATE MET (2026-08-02): tests/live/187_sqlconfig_live.ky runs the full API + store-driven reconcile
   against a REAL btree server (nova-btreedb driver on the reactor); run-live-tests.sh starts/stops a fresh
   server. The live run required one fix -- BTreeDB UPDATE does not evaluate a column-referencing
   expression (`SET rev = rev + 1` -> empty tag), so nextRevision is a read-modify-write with an explicit
@@ -184,7 +184,7 @@ the store), not the source of truth.
   or frame stamped with an epoch older than the highest it has seen, so a partitioned old leader cannot
   commit even before its lease TTL expires. Gate: kill the leader, a standby promotes, and the old leader
   (artificially unpaused after promotion) has its writes REJECTED by fencing - proven, not documented.
-  STATUS (2026-08-02): the ORCHESTRATOR-side policy is DONE + offline-proven in src/orch/lease.nova.
+  STATUS (2026-08-02): the ORCHESTRATOR-side policy is DONE + offline-proven in src/orch/lease.ky.
   LeaderLease over the config-store CAS: a "holder|epoch|deadlineMs" lease row, tryAcquire (CAS-create when
   free / CAS-on-revision takeover when expired, epoch BUMPED each takeover), renew (only while we still
   hold it at our epoch), stillLeader, currentEpoch, and haReconcileTick (reconcile ONLY while the valid
@@ -198,7 +198,7 @@ the store), not the source of truth.
   login / txn-boundaries pass, so a fenced node serves reads), test "store-side write fencing" green
   across observe/promote/reopen. So fencing is enforced at BOTH tiers (lease policy + R2 ship frames + the
   store's own write guard). LIVE MULTI-NODE DONE (2026-08-02, commit 8fa3405): AsyncLeaderLease
-  (src/orch/asynclease.nova) is the async sibling over SqlConfigStore; live test 189 drives TWO nodes
+  (src/orch/asynclease.ky) is the async sibling over SqlConfigStore; live test 189 drives TWO nodes
   (each its own btree connection over the SAME btree) contending for one lease row via the store CAS --
   A leads (epoch 1), A partitions, B promotes (epoch 2), old A FENCED, all against real persistence
   (offline 11/11, live 2/2). AUTO-LINK DONE (2026-08-02, orch 1a71c06 / btree e776b88): a promotion now
@@ -268,7 +268,7 @@ the store), not the source of truth.
   + P3 live lease + this gate).
 - P6 Security on every hop: authn + authz on the config-store API (only the orchestrator identity may
   write; RBAC for read scopes), and mutually-authenticated TLS on the replication stream and the client
-  connections (reuse the pure-Nova TLS 1.3 stack). No plaintext WAL frames on the wire, no unauthenticated
+  connections (reuse the pure-Kyte TLS 1.3 stack). No plaintext WAL frames on the wire, no unauthenticated
   writer. Gate: an unauthenticated peer cannot ship frames or write config; a wrong-cert follower is
   refused.
 - P7 Operability: backup + point-in-time restore of the store; rolling upgrade of orchestrator nodes with
@@ -297,9 +297,9 @@ tests referenced. Legend: DONE / SUBSTANTIALLY (mechanism done, one proof deferr
 | P1 Config-store layer | DONE | 184/185/186 offline; 187 live vs real btree | -- |
 | P2 Replication apply side | SUBSTANTIALLY | btree R1 applyStream (24/24), R2 Follower/ReplServer, becomeFollower lifecycle, restart-durable, crash-safe | kill-mid-apply subprocess proof (folds into P8) |
 | P3 Orchestrator HA (fenced) | DONE | 188 offline; 189/190 live two-node; auto-link SET FENCE EPOCH | kill-mid-promotion proof (folds into P8) |
-| P4 Beta hardening | DONE | 191 rollout safety; 192 status/underProvisioned; audit cols 185+187; 193 health/readyz/metrics (orch/health.nova) | -- (Beta line complete) |
+| P4 Beta hardening | DONE | 191 rollout safety; 192 status/underProvisioned; audit cols 185+187; 193 health/readyz/metrics (orch/health.ky) | -- (Beta line complete) |
 | P5 Bounded RPO (quorum-ack) | DONE | btree DurableReplicator live-wired into executor commit; "SET DURABLE COMMIT" flag; 2 real-socket tests (RPO=0 + no-quorum-fails); SqlConfigStore.setDurable opt-in | -- |
-| P6 Security (authn/authz + mTLS) | DONE (btree tier) | (1) REPLICA AUTHZ: HMAC challenge-response (wrong/missing key refused before any frame). (2) CONFIG-API RBAC: executor enforces users/roles/per-object perms + no-token rejection + adminGate on the control commands. (3) MUTUAL TLS: replication stream wrapped in TLS 1.3 with client-cert verify against a shared CA (valid chain ships, rogue-CA client refused). btree 37/37 | driver follow-on only: thread login/token through the Nova db.Connection seam so the store authenticates (enforcement already exists) |
+| P6 Security (authn/authz + mTLS) | DONE (btree tier) | (1) REPLICA AUTHZ: HMAC challenge-response (wrong/missing key refused before any frame). (2) CONFIG-API RBAC: executor enforces users/roles/per-object perms + no-token rejection + adminGate on the control commands. (3) MUTUAL TLS: replication stream wrapped in TLS 1.3 with client-cert verify against a shared CA (valid chain ships, rogue-CA client refused). btree 37/37 | driver follow-on only: thread login/token through the Kyte db.Connection seam so the store authenticates (enforcement already exists) |
 | P7 Operability (backup/PITR, upgrade, runbooks) | PARTIAL | backup/restore DONE (exportSnapshot + restoreSnapshot, byte-for-byte + MVCC-visible); PITR DONE (recoverTo(target) + openAt); RUNBOOKS DONE (docs/runbooks.md: 10 failure modes, each tied to a real mechanism, incl. manual rolling-upgrade + membership procedures). btree 40/40 | AUTOMATED rolling upgrade + membership (live-node orchestration; manual procedures documented) |
 | P8 Chaos + soak (RPO/RTO proof) | PARTIAL | chaos_suite.sh: kill-leader-after-load + kill-leader-mid-write 2/2 PASS; in-process: corrupt-frame-rejected (NEW), fenced-old-leader, follower-reship-after-crash, CLOCK-SKEW fencing safety (NEW, test 188). STATED RPO=0 (sync/quorum), RTO=lease TTL + tick | subprocess kill-follower-mid-apply + partition live harness; disk-full injection; multi-hour soak in CI |
 
@@ -331,7 +331,7 @@ Production line (P5-P8): P5 core exists (wiring remains); P6/P7/P8 are the multi
    confirmed-seq covering the frame before acking the client. Async remains the default; durable writes opt
    in. [replication/durability]
 7. AUTHENTICATED + TLS replication (production): the ship/apply stream runs over mutually-authenticated TLS
-   (pure-Nova TLS 1.3 stack) and rejects an unauthenticated or wrong-identity peer. No plaintext frames.
+   (pure-Kyte TLS 1.3 stack) and rejects an unauthenticated or wrong-identity peer. No plaintext frames.
    [security]
 8. BACKUP / RESTORE (production): a consistent snapshot (checkpoint + WAL tail) that can be copied off-box
    and restored to a known revision; point-in-time restore by replaying WAL to a target seq. [operability]
@@ -356,7 +356,7 @@ write volume ever demands multi-writer, which it will not).
 - Reconcile is idempotent and crash-safe: a mid-reconcile crash re-derives from the store on restart,
   never double-starts or orphans a workload.
 - Health/readiness of the orchestrator itself is exposed (an endpoint), separate from workload probes. DONE
-  (2026-08-03): orch/health.nova -- HealthReport.healthy()/ready() + healthzText/readyzText (/healthz liveness =
+  (2026-08-03): orch/health.ky -- HealthReport.healthy()/ready() + healthzText/readyzText (/healthz liveness =
   store reachable; /readyz = reachable AND a valid unfenced role; a fenced old leader is LIVE but NOT ready),
   live source via buildHealth(lease, nativelet, lag, latency) + classifyRole (leader/standby/fenced). Test 193.
 - Rollout safety: a bad spec update does not take down healthy replicas (validate before apply; keep the
@@ -364,7 +364,7 @@ write volume ever demands multi-writer, which it will not).
 - Observability: structured logs + basic metrics (reconcile latency, replica count vs desired, restart
   counts, leader identity, replication lag = leader LSN minus follower confirmed seq). PARTIAL (2026-08-03):
   Nativelet.status()/underProvisioned()/totalRunning() give replica-count-vs-desired + restart counts (test
-  192); leader identity is on the lease row. DONE (2026-08-03): orch/health.nova renderMetrics emits a
+  192); leader identity is on the lease row. DONE (2026-08-03): orch/health.ky renderMetrics emits a
   Prometheus scrape -- orch_up/orch_ready/orch_leader_epoch/orch_under_provisioned + per-workload
   running/desired/restarts, PLUS orch_reconcile_latency_ms (measured by timedReconcile around haReconcileTick
   via datetime.nowNs) and orch_replication_lag_frames (ReplLag = leader LSN minus follower confirmed-seq, 0 on
@@ -427,7 +427,7 @@ Legend: [B] = Beta line (P0-P4). [P] = Production line (P5-P8).
 | Fencing epoch (split-brain close) | DONE end to end: lease epoch (orch) + R2 frame fencing + store-write guard, AUTO-LINKED (lease promotion stamps the store via SET FENCE EPOCH; a higher frame epoch stamps a follower) | -- |
 | Orchestrator Beta hardening | MVP reconcile/restart/probe/autoscale | [B] section 6a checklist |
 | Bounded RPO (quorum-ack) | DONE: DurableReplicator live-wired into the executor commit (WAL-ship-callback buffer incl. catalog; contiguous repl seq); "SET DURABLE COMMIT" per-write flag; 2 real-socket tests (RPO=0 follower-has-it + no-quorum-fails); SqlConfigStore.setDurable opt-in | -- |
-| Security (authn/authz + TLS) | DONE (btree tier): replica-auth HMAC + config-API RBAC (users/roles/per-object + control-command adminGate) + MUTUAL TLS on the replication stream (client-cert verify vs shared CA; rogue-CA refused), test P6 mutual TLS | driver follow-on: login/token through the Nova Connection seam so the store authenticates |
+| Security (authn/authz + TLS) | DONE (btree tier): replica-auth HMAC + config-API RBAC (users/roles/per-object + control-command adminGate) + MUTUAL TLS on the replication stream (client-cert verify vs shared CA; rogue-CA refused), test P6 mutual TLS | driver follow-on: login/token through the Kyte Connection seam so the store authenticates |
 | Backup / restore (PITR) | WAL + checkpoint exist | [P] consistent snapshot off-box; replay-to-seq restore |
 | Rolling upgrade + membership | nothing | [P] drain/promote/upgrade/rejoin; add/remove follower live |
 | Chaos + soak proof (RPO/RTO) | nothing | [P] fault-injection suite + multi-hour soak; numbers in CI |

@@ -1,4 +1,4 @@
-# Running the Nova orchestrator as system services
+# Running the Kyte orchestrator as system services
 
 These scripts install the three long-running orchestrator daemons so they start on boot and restart on
 failure. `orchctl` is an offline CLI, not a service, so it is copied alongside but not registered.
@@ -21,14 +21,14 @@ Build the binaries first (from the repository root):
 ```bash
 sudo deploy/linux/install.sh --from build/release/bin --enable --start
 # manage:
-sudo systemctl status nova-artifactd nova-orchd nova-service
-sudo systemctl restart nova-orchd
+sudo systemctl status kyte-artifactd kyte-orchd kyte-service
+sudo systemctl restart kyte-orchd
 sudo deploy/linux/uninstall.sh            # add --purge to also delete config + data
 ```
 
 Binaries go to `/opt/nova-orchestrator/bin`, config to `/etc/nova-orchestrator`, data to
 `/var/lib/nova-orchestrator` (override with `BIN_DIR` / `CONF_DIR` / `DATA_DIR`). `artifactd` and
-`service` run as an unprivileged `nova` user; `orchd` runs as root because it supervises processes and
+`service` run as an unprivileged `kyte` user; `orchd` runs as root because it supervises processes and
 applies cgroup / network-namespace isolation. Put the deploy token in `/etc/nova-orchestrator/artifactd.env`.
 
 ## macOS (launchd)
@@ -36,8 +36,8 @@ applies cgroup / network-namespace isolation. Put the deploy token in `/etc/nova
 ```bash
 sudo deploy/macos/install.sh --from build/release/bin --load
 # manage:
-sudo launchctl print system/com.nova.orchd
-sudo launchctl bootout system /Library/LaunchDaemons/com.nova.orchd.plist   # stop
+sudo launchctl print system/com.ky.orchd
+sudo launchctl bootout system /Library/LaunchDaemons/com.ky.orchd.plist   # stop
 sudo deploy/macos/uninstall.sh            # add --purge to also delete config/data/logs
 ```
 
@@ -73,4 +73,4 @@ The installer defaults to NSSM if `nssm.exe` is found, else Scheduled Tasks. Bin
   Edit the config, then restart the daemon.
 - `service.json` ships with an empty `backends` list; either fill it in, or run `orchd` with a discovery
   file so `service` load-balances across the replicas orchd currently has healthy.
-- Set `NOVA_ARTIFACT_TOKEN` (the deploy bearer token) for any non-dev deployment; empty means auth is off.
+- Set `KYTE_ARTIFACT_TOKEN` (the deploy bearer token) for any non-dev deployment; empty means auth is off.

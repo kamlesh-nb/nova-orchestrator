@@ -1,7 +1,7 @@
 # nova-orchestrator
 
-A native, container-free orchestration stack written in **Nova** — a Kubernetes-style control plane that
-runs workloads as **native binaries, not containers**. This is an *application package* built on the Nova
+A native, container-free orchestration stack written in **Kyte** — a Kubernetes-style control plane that
+runs workloads as **native binaries, not containers**. This is an *application package* built on the Kyte
 language + runtime; it is **not** part of the language standard library.
 
 It bundles the whole I1–I4 infrastructure tier:
@@ -33,11 +33,11 @@ of the package through the import graph, so dead-code elimination keeps them gen
 | **`artifactd`** | data | the content-addressed blob daemon: a deploy-artifact origin that stores native binaries keyed by their sha256 (idempotent, verified) and serves them by hash to each orchd node before it spawns a replica | `artifacts.blobstore`, `artifacts.registry`, `artifacts.service`, `web.*` |
 
 `orchweb` is **not** a `bin/` entrypoint: it is the live, browser-facing sibling of `orchctl`, a WRITABLE
-control-plane UI (a Tailwind web app whose entry point is `webui/src/main.nova`, built via `./build.sh`).
+control-plane UI (a Tailwind web app whose entry point is `webui/src/main.ky`, built via `./build.sh`).
 It presents a node -> service -> replica tree, a service's complete manifest as an editable form, and a
 per-node deploy screen, over `orch.controlplane`, `orch.manifest`, `store.sqlconfig`, and `web.*`. It is
-a full vertical-slice Nova web app
-(`webui/`, scaffolded like `nova init web`: `src/Features/ControlPlane/...`, `wwwroot/`, `project.json`).
+a full vertical-slice Kyte web app
+(`webui/`, scaffolded like `kyte init web`: `src/Features/ControlPlane/...`, `wwwroot/`, `project.json`).
 The sidebar is a tree of cluster nodes (`members/<id>`) -> services (`workloads/<name>`) -> desired replica
 slots. Clicking a service opens its complete manifest as an editable form; clicking a node opens a deploy
 screen. Navigation is server-rendered hypermedia (links + form POSTs, Tailwind for styling), so there is no
@@ -45,20 +45,20 @@ client state to bind. Every deploy / save / tear down writes a canonical YAML ma
 store under `workloads/<name>` (or deletes that key); the leader `orchd`'s reconcile loop
 (`asynclease.haReconcileTick` -> `nativelet.reconcileFromEntries`, which is manifest-aware) reads exactly
 those keys and converges the fleet. So an action actually spawns, scales, or stops workloads. Connects to
-NovaDB via `NOVA_ORCHWEB_DSN` (default `novadb://admin@127.0.0.1:3009?db=nova`), seeds the local node
-(`NOVA_ORCHWEB_NODE`, default `node-1`), and serves on `NOVA_PORT` (default 8130). Build: `./build.sh`
-(builds `webui/src/main.nova`).
+NovaDB via `KYTE_ORCHWEB_DSN` (default `novadb://admin@127.0.0.1:3009?db=kyte`), seeds the local node
+(`KYTE_ORCHWEB_NODE`, default `node-1`), and serves on `KYTE_PORT` (default 8130). Build: `./build.sh`
+(builds `webui/src/main.ky`).
 
 ### Security: artifactd is plain HTTP behind a bearer token
 
 `artifactd` serves the blob origin over **plain HTTP** (no TLS of its own) and authenticates writes with a
-single bearer token read from `NOVA_ARTIFACT_TOKEN`. This is a deliberate stopgap, so be honest about what
+single bearer token read from `KYTE_ARTIFACT_TOKEN`. This is a deliberate stopgap, so be honest about what
 it means in production:
 
 - **It MUST sit behind TLS termination** (a reverse proxy or the platform's own `service` with TLS) on any
   network you do not fully trust. Uploaded artifacts and the bearer token itself cross the wire in the
   clear otherwise.
-- **An empty `NOVA_ARTIFACT_TOKEN` disables auth entirely** (the daemon logs `auth=OFF (dev)` at startup).
+- **An empty `KYTE_ARTIFACT_TOKEN` disables auth entirely** (the daemon logs `auth=OFF (dev)` at startup).
   That is for local development only. In production, always set a strong token, and terminate TLS in front
   of it.
 
@@ -92,7 +92,7 @@ orchd  orchd.json               # reconcile loop; ORCHD_CONFIG=... ; orchd --che
 
 ### Cross-compiling (host build matrix)
 
-The nova toolchain cross-compiles from any host (macOS, Windows, WSL/Linux). Pass `--target <triple>` to
+The kyte toolchain cross-compiles from any host (macOS, Windows, WSL/Linux). Pass `--target <triple>` to
 `build.sh`; the cross binaries land under `build/<profile>/<triple>/bin/`:
 
 ```sh
@@ -103,7 +103,7 @@ The nova toolchain cross-compiles from any host (macOS, Windows, WSL/Linux). Pas
 ./build.sh --release --target windows-x86_64   # Windows x86_64 (produces .exe)
 ```
 
-Windows aarch64 is the one target of the six-way matrix we cannot produce today: the nova compiler does
+Windows aarch64 is the one target of the six-way matrix we cannot produce today: the kyte compiler does
 not accept `windows-arm64` as a `--target` yet (only the five triples above are wired in the compiler), so
 `./build.sh --target windows-arm64` fails fast with a clear message. Adding the triple to the compiler
 (`lang/src/main.zig`) is what unblocks it.
@@ -126,15 +126,15 @@ not accept `windows-arm64` as a `--target` yet (only the five triples above are 
 { "manifestsDir": "manifests", "reconcileMs": 2000, "nodeId": "node-1", "discoveryFile": "" }
 ```
 
-`strategy` is one of `roundrobin | weighted | leastconn | consistenthash`. `NOVA_PORT` overrides
+`strategy` is one of `roundrobin | weighted | leastconn | consistenthash`. `KYTE_PORT` overrides
 `service`'s listen port so many proxy replicas can run on one host. When `discoveryFile` +
 `discoveryService` are set on `service`, its backend is resolved from that file instead of (or in addition
 to) the static `backends` list.
 
 ## Requirements
 
-Built against the Nova toolchain (`nova`) and its runtime, which provide the seams this package calls:
-`nova_process_spawn` / `_try_wait` / `_pid` / `_spawn_isolated`, `nova_aserver_listen_addr`, the async
+Built against the Kyte toolchain (`kyte`) and its runtime, which provide the seams this package calls:
+`kyte_process_spawn` / `_try_wait` / `_pid` / `_spawn_isolated`, `kyte_aserver_listen_addr`, the async
 socket/timer primitives (`net.aio`), `process`, `io.file`, `io.dir`, `serde.json`, `collections`.
 
 **Linux-only features:** cgroups-v2 limits, cgroup-CPU autoscaling, and `os.sandbox` isolation
@@ -144,14 +144,14 @@ plain process supervision, so the orchestrator still runs.
 ## Install
 
 ```sh
-nova get https://github.com/kamlesh-nb/nova-orchestrator
+kyte get https://github.com/kamlesh-nb/nova-orchestrator
 ```
 
-This clones the package into `~/.nova/cache/nova-orchestrator` and locks it in your `project.json`
-`dependencies`. `nova get` with no argument restores every locked dependency. Imports then resolve from
+This clones the package into `~/.kyte/cache/nova-orchestrator` and locks it in your `project.json`
+`dependencies`. `kyte get` with no argument restores every locked dependency. Imports then resolve from
 the cache — no vendoring:
 
-```nova
+```kyte
 import orch.nativelet;   // resolved from the fetched package
 import net.proxy;
 import os.sandbox;
@@ -160,9 +160,9 @@ import os.sandbox;
 ## Usage (programmatic)
 
 The two binaries above are the normal entrypoints. To embed a tier directly, this is exactly what
-`bin/orchd.nova` does (`net.aio` is the async runtime module, formerly `net.asyncio`):
+`bin/orchd.ky` does (`net.aio` is the async runtime module, formerly `net.asyncio`):
 
-```nova
+```kyte
 import orch.nativelet;
 import net.aio;
 
@@ -181,7 +181,7 @@ A workload manifest (`manifests/web.json`):
   "name": "web", "binaryPath": "/opt/app", "args": ["--port", "8080"],
   "restartPolicy": "always", "replicas": 3,
   "cpuMilli": 500, "memMaxBytes": 268435456, "pidsMax": 128,
-  "isolationLevel": 1, "rootfs": "/var/lib/nova/rootfs/web",
+  "isolationLevel": 1, "rootfs": "/var/lib/kyte/rootfs/web",
   "probe": { "port": 8080, "path": "/healthz", "periodMs": 2000 }
 }
 ```
@@ -189,8 +189,8 @@ A workload manifest (`manifests/web.json`):
 ## Tests
 
 ```sh
-./run-tests.sh          # runs every tests/*.nova via `nova test`
+./run-tests.sh          # runs every tests/*.ky via `kyte test`
 ```
 
 Run from a checkout that sits alongside the `lang` toolchain (the resolver finds this package via
-`../packages`). Requires `nova` on `PATH`.
+`../packages`). Requires `kyte` on `PATH`.

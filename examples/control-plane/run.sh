@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Nova control plane — a live Datastar dashboard over the orchestrator app registry.
+# Kyte control plane — a live Datastar dashboard over the orchestrator app registry.
 # Builds and serves it; the browser page loads Datastar from the CDN and patches the apps table.
 set -u
-export PATH="$HOME/.nova/bin:$PATH"
+export PATH="$HOME/.kyte/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE/../.."   # package root
 pkill -9 -x controld 2>/dev/null; sleep 0.3
 echo "building control plane ..."
-nova build --file examples/control-plane/main.nova -o /tmp/controld >/dev/null || { echo "build failed"; exit 1; }
+kyte build --file examples/control-plane/main.ky -o /tmp/controld >/dev/null || { echo "build failed"; exit 1; }
 echo "serving on http://127.0.0.1:8130  (Ctrl-C to stop) ..."
 /tmp/controld &
 srv=$!; sleep 1.2

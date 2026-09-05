@@ -1,0 +1,98 @@
+// artifacts/blobstore.ky -- a content-addressed blob store on the filesystem.
+//
+// A deploy artifact (a native binary) is stored at  <root>/<ab>/<cd>/<sha256>  where the sha256 hex IS
+// the file name. Because the name is the content hash, integrity is self-checking (verify the bytes hash
+// to their own name) and replication is a plain file copy -- no coordination, hash equality is the
+// correctness proof. Bodies are handled as Kyte `string`s, which are length-prefixed byte buffers (the
+// web framework is binary-safe), so a binary blob round-trips through readText/writeText intact.
+//
+// This is used TWO ways: as the origin store behind the artifact service (artifacts/service.ky), and as
+// each orchd node's local pull cache (orch/artifact.ky). Same type, same guarantees.
+import io.file;
+import io.dir;
+import string;
+import crypto.hash.sha;
+import crypto.random;
+
+pub class BlobStore {
+    root: string,
+
+    init(root: string) { self.root = root; }
+
+    // <root>/<first2>/<next2>/<sha>. Two-level fan-out keeps any one directory from holding every blob.
+    fn shardDir(self: BlobStore, sha: string): string {
+        return self.root + "/" + string.slice(sha, 0, 2) + "/" + string.slice(sha, 2, 4);
+    }
+    pub fn localPath(self: BlobStore, sha: string): string {
+        return self.shardDir(sha) + "/" + sha;
+    }
+
+    // A well-formed sha256 hex: 64 lowercase hex chars. Guards the filesystem layout from a crafted name
+    // (e.g. path traversal) before it is ever used to build a path.
+    pub fn validSha(self: BlobStore, sha: string): bool {
+        if (string.len(sha) != 64) { return false; }
+        let i = 0;
+        while (i < 64) {
+            let c = sha[i];
+            let ok = (c >= 48 && c <= 57) || (c >= 97 && c <= 102);   // 0-9 a-f
+            if (!ok) { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+
+    pub fn has(self: BlobStore, sha: string): bool {
+        if (!self.validSha(sha)) { return false; }
+        return File.exists(self.localPath(sha));
+    }
+
+    // The whole blob as a (binary-safe) string, or undefined when absent OR corrupt-on-disk. Content
+    // addressing lets us VERIFY on read: the bytes must still hash to their own name, so bit-rot, a
+    // truncated file, or an out-of-band tamper is caught here instead of being handed to the supervisor to
+    // exec. (Re-hashing on read is affordable because reads -- an orchd pull or a service GET -- are rare;
+    // the spawn hot path uses has()/localPath(), not get().)
+    pub fn get(self: BlobStore, sha: string): string | undefined {
+        if (!self.has(sha)) { return undefined; }
+        let data = File.readText(self.localPath(sha));
+        if (!string.eql(hash256(data), sha)) { return undefined; }   // verify-on-read: refuse corrupt bytes
+        return data;
+    }
+
+    // THE security-critical write. The content MUST hash to `sha` (its own name) or the write is rejected,
+    // so a lying client / corrupt transfer can never publish a blob under a name it does not match. Writes
+    // to a PER-WRITE-UNIQUE temp file then atomic-renames, so a half-written blob is never visible under its
+    // final name AND two concurrent writers of the same blob never clobber each other's temp (the fixed
+    // "<sha>.tmp" was safe only within one single-reactor process; a random suffix makes it safe across
+    // processes / a shared mount). Returns true on a durable, verified store (or if it was already present).
+    pub fn put(self: BlobStore, sha: string, data: string): bool {
+        if (!self.validSha(sha)) { return false; }
+        if (!string.eql(hash256(data), sha)) { return false; }       // integrity gate
+        if (self.has(sha)) { return true; }                          // idempotent
+        ensureDir(self.shardDir(sha));                               // mkdir -p root/ab/cd
+        let p = self.localPath(sha);
+        let tmp = p + "." + random.randomHex(8) + ".tmp";            // unique per write (16 hex chars)
+        if (!File.writeTextOk(tmp, data)) { return false; }
+        if (Dir.rename(tmp, p) == 0) { return true; }                // atomic publish
+        let _ = File.remove(tmp);                                    // rename failed -> don't leak the temp
+        return false;
+    }
+}
+
+// The sha256 hex digest of a (binary-safe) string. Content addressing keys on this.
+fn hash256(data: string): string { return sha.sha256(data); }
+
+// mkdir -p: create every ancestor of `path` (single-level Dir.create is all the stdlib exposes).
+// mkdir on an existing directory is a harmless non-zero return, so each prefix is created best-effort.
+fn ensureDir(path: string): void {
+    let n = string.len(path);
+    let i = 1;
+    while (i <= n) {
+        if (i == n || path[i] == 47) {                 // 47 = '/'
+            let prefix = string.slice(path, 0, i);
+            if (!string.eql(prefix, "") && !string.eql(prefix, "/")) {
+                let _ = Dir.create(prefix, 493);        // 0o755
+            }
+        }
+        i = i + 1;
+    }
+}

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Install the Nova orchestrator daemons (artifactd, orchd, service) as systemd units on Linux.
+# Install the Kyte orchestrator daemons (artifactd, orchd, service) as systemd units on Linux.
 #
 # Layout (override with env vars):
 #   BIN_DIR   /opt/nova-orchestrator/bin      built binaries are copied here
 #   CONF_DIR  /etc/nova-orchestrator          orchd.json / service.json / artifactd.env
 #   DATA_DIR  /var/lib/nova-orchestrator      blobs, config.snap, discovery/metrics files
-#   SVC_USER  nova                            unprivileged user for artifactd + service
+#   SVC_USER  kyte                            unprivileged user for artifactd + service
 #
 # Usage:  sudo ./install.sh [--from <dir-with-binaries>] [--enable] [--start]
 #   --from   directory containing service/orchd/orchctl/artifactd (default: ../../build/release/bin)
@@ -17,7 +17,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 BIN_DIR="${BIN_DIR:-/opt/nova-orchestrator/bin}"
 CONF_DIR="${CONF_DIR:-/etc/nova-orchestrator}"
 DATA_DIR="${DATA_DIR:-/var/lib/nova-orchestrator}"
-SVC_USER="${SVC_USER:-nova}"
+SVC_USER="${SVC_USER:-kyte}"
 FROM="$here/../../build/release/bin"
 DO_ENABLE=0; DO_START=0
 while [ $# -gt 0 ]; do
@@ -46,22 +46,22 @@ done
 echo "==> Seeding config templates (only if absent -- never overwrites yours)"
 [ -f "$CONF_DIR/orchd.json" ]    || printf '{\n  "manifestsDir": "%s/manifests",\n  "reconcileMs": 2000,\n  "nodeId": "node-1",\n  "discoveryFile": "%s/discovery.txt",\n  "metricsFile": "%s/metrics.prom",\n  "store": { "enabled": true, "addr": "127.0.0.1:8135", "token": "", "tls": false }\n}\n' "$DATA_DIR" "$DATA_DIR" "$DATA_DIR" > "$CONF_DIR/orchd.json"
 [ -f "$CONF_DIR/service.json" ]  || printf '{\n  "listenHost": "0.0.0.0", "listenPort": 8090, "strategy": "roundrobin",\n  "health": { "enabled": true, "path": "/healthz", "intervalMs": 2000, "timeoutMs": 1000, "rise": 2, "fall": 3 },\n  "backends": []\n}\n' > "$CONF_DIR/service.json"
-[ -f "$CONF_DIR/artifactd.env" ] || { printf '# NOVA_ARTIFACT_TOKEN=change-me-deploy-token\n' > "$CONF_DIR/artifactd.env"; chmod 0640 "$CONF_DIR/artifactd.env"; chgrp "$SVC_USER" "$CONF_DIR/artifactd.env"; }
+[ -f "$CONF_DIR/artifactd.env" ] || { printf '# KYTE_ARTIFACT_TOKEN=change-me-deploy-token\n' > "$CONF_DIR/artifactd.env"; chmod 0640 "$CONF_DIR/artifactd.env"; chgrp "$SVC_USER" "$CONF_DIR/artifactd.env"; }
 install -d -m 0750 -o "$SVC_USER" -g "$SVC_USER" "$DATA_DIR/manifests"
 
 echo "==> Installing systemd units"
-install -m 0644 "$here/nova-artifactd.service" "$here/nova-orchd.service" "$here/nova-service.service" /etc/systemd/system/
+install -m 0644 "$here/kyte-artifactd.service" "$here/kyte-orchd.service" "$here/kyte-service.service" /etc/systemd/system/
 systemctl daemon-reload
 
 if [ "$DO_ENABLE" = 1 ]; then
   echo "==> Enabling units (start on boot)"
-  systemctl enable nova-artifactd.service nova-orchd.service nova-service.service
+  systemctl enable kyte-artifactd.service kyte-orchd.service kyte-service.service
 fi
 if [ "$DO_START" = 1 ]; then
   echo "==> Starting units"
-  systemctl start nova-artifactd.service nova-orchd.service nova-service.service
-  systemctl --no-pager status nova-artifactd.service nova-orchd.service nova-service.service | sed -n '1,30p' || true
+  systemctl start kyte-artifactd.service kyte-orchd.service kyte-service.service
+  systemctl --no-pager status kyte-artifactd.service kyte-orchd.service kyte-service.service | sed -n '1,30p' || true
 fi
 
-echo "Done. Manage with: systemctl {status,start,stop,restart} nova-{artifactd,orchd,service}"
-echo "Edit config in $CONF_DIR, then: systemctl restart nova-<component>"
+echo "Done. Manage with: systemctl {status,start,stop,restart} kyte-{artifactd,orchd,service}"
+echo "Edit config in $CONF_DIR, then: systemctl restart kyte-<component>"

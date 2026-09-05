@@ -1,10 +1,10 @@
 [Unit]
-Description=Nova orchd (control plane: reconcile, supervise replicas, HA lease, discovery)
+Description=Kyte orchd (control plane: reconcile, supervise replicas, HA lease, discovery)
 Documentation=https://github.com/kamlesh-nb/nova-orchestrator
-After=network-online.target nova-artifactd.service
+After=network-online.target kyte-artifactd.service
 Wants=network-online.target
 # orchd's config store client talks to artifactd; start it after artifactd when they share a host.
-After=nova-artifactd.service
+After=kyte-artifactd.service
 
 [Service]
 Type=simple

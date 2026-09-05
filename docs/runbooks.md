@@ -5,7 +5,7 @@ step maps to a real mechanism built in this repo (orchestrator lease + reconcile
 durable commit, snapshot/PITR). A system is production grade when someone who did not write it can operate it
 under failure -- this file is that.
 
-## Signals to watch (from orch/health.nova, scraped at /metrics)
+## Signals to watch (from orch/health.ky, scraped at /metrics)
 
 | Metric | Meaning | Alert when |
 |---|---|---|
@@ -156,7 +156,7 @@ every action writes desired state into the SAME config store `orchd` reconciles 
 by the leader `orchd`'s reconcile loop.
 
 Run it beside the cluster:
-1. Point it at the store: `NOVA_ORCHWEB_DSN=novadb://admin@<btree-host>:3009?db=nova`, `NOVA_PORT=8130`.
+1. Point it at the store: `KYTE_ORCHWEB_DSN=novadb://admin@<btree-host>:3009?db=kyte`, `KYTE_PORT=8130`.
 2. Start `build/*/bin/orchweb`; open `http://127.0.0.1:8130`. The table refreshes every 2s from the store.
 
 - DEPLOY / update: paste a manifest YAML and click Deploy. It is validated (a bad manifest is rejected with

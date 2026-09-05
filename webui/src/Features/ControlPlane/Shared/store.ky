@@ -1,0 +1,182 @@
+// ControlPlane -- the app's repository, injected into every handler. It owns the NovaDB config store the
+// fleet reconciles from and exposes the reads (nodes, services) and writes (deploy, scale, teardown) the UI
+// needs, in terms of the domain read model (Domain/entities/cluster). It also maps a stored YAML manifest
+// to/from a ServiceView.
+//
+// Connecting is asynchronous and must run on the reactor, so we do NOT connect in the constructor; we
+// connect lazily on the first async use inside a handler, create the config schema once, and seed the local
+// node if the cluster is empty (so the tree is never blank). Same rule as the guide's KyteDbConnection.
+import list;
+import map;
+import string;
+import data.db;
+import novadb;
+import store.sqlconfig;
+import store.config;
+import orch.manifest;
+import Domain.entities.cluster;
+
+pub struct ControlPlane impl Service {
+    driver: KyteDriver,
+    dsn: string,
+    nodeId: string,
+    advertise: string,
+    conn: Connection | undefined,
+    cfgStore: sqlconfig.SqlConfigStore | undefined,
+    seeded: bool,
+    // Parsed-manifest cache, keyed by the raw stored YAML. A manifest's YAML is stable between edits, so
+    // this parses each distinct manifest once instead of on every request (every /api/tree read used to
+    // re-parse every workload's YAML). It keeps the per-request footprint flat and is a real perf win; a
+    // deploy/scale writes new YAML under a new key, so a stale view is never served.
+    views: Map<string, cluster.ServiceView>,
+
+    init(dsn: string, nodeId: string, advertise: string) {
+        self.driver = KyteDriver();
+        self.dsn = dsn;
+        self.nodeId = nodeId;
+        self.advertise = advertise;
+        self.conn = undefined;
+        self.cfgStore = undefined;
+        self.seeded = false;
+        self.views = Map<string, cluster.ServiceView>(16, string.hash);
+    }
+
+    // Map stored YAML to a ServiceView, memoised by the YAML text (see `views` above).
+    fn viewCached(self: ControlPlane, yaml: string): cluster.ServiceView {
+        let hit = self.views.get(yaml);
+        if (hit != undefined) { return hit ?? cluster.ServiceView(); }
+        let v = viewOf(yaml);
+        self.views.set(yaml, v);
+        return v;
+    }
+
+    async fn ensure(self: ControlPlane): sqlconfig.SqlConfigStore {
+        // Reuse one SqlConfigStore for the lifetime of the connection. Building a fresh wrapper on every
+        // request left one owned wrapper per call stranded in the async frame (a per-request leak); the
+        // single cached instance is created once on first connect.
+        let cached = self.cfgStore;
+        if (cached != undefined) { return cached; }
+        let c = await self.driver.connect(self.dsn);
+        let s = sqlconfig.SqlConfigStore(c);
+        await s.ensureSchema();
+        self.conn = c;
+        self.cfgStore = s;
+        if (!self.seeded) {
+            let members = await s.list("members/");
+            if (members.size() == 0) { let _ = await s.putBy("members/" + self.nodeId, self.advertise, "orchweb"); }
+            self.seeded = true;
+        }
+        return s;
+    }
+
+    pub async fn nodes(self: ControlPlane): list.List<cluster.NodeView> {
+        let s = await self.ensure();
+        let entries = await s.list("members/");
+        let out = list.List<cluster.NodeView>();
+        let i = 0;
+        while (i < entries.size()) {
+            let e = entries.get(i) ?? config.ConfigEntry("", "", 0);
+            out.push(cluster.NodeView(string.slice(e.key, string.len("members/"), string.len(e.key)), e.value));
+            i = i + 1;
+        }
+        return out;
+    }
+
+    pub async fn services(self: ControlPlane): list.List<cluster.ServiceView> {
+        let s = await self.ensure();
+        let entries = await s.list("workloads/");
+        let out = list.List<cluster.ServiceView>();
+        let i = 0;
+        while (i < entries.size()) {
+            let e = entries.get(i) ?? config.ConfigEntry("", "", 0);
+            if (!string.eql(e.value, "")) { out.push(self.viewCached(e.value)); }
+            i = i + 1;
+        }
+        return out;
+    }
+
+    pub async fn node(self: ControlPlane, id: string): cluster.NodeView {
+        let ns = await self.nodes();
+        let i = 0;
+        while (i < ns.size()) {
+            let nv = ns.get(i) ?? cluster.NodeView("", "");
+            if (string.eql(nv.id, id)) { return nv; }
+            i = i + 1;
+        }
+        return cluster.NodeView(id, "");
+    }
+
+    pub async fn service(self: ControlPlane, name: string): cluster.ServiceView {
+        let s = await self.ensure();
+        let cur = await s.get("workloads/" + name) ?? config.ConfigEntry("", "", 0);
+        if (string.eql(cur.value, "")) { return cluster.ServiceView(); }
+        return self.viewCached(cur.value);
+    }
+
+    // Store a manifest (validated by the caller) under workloads/<name>.
+    pub async fn deploy(self: ControlPlane, m: manifest.Manifest): void {
+        let s = await self.ensure();
+        let _ = await s.putBy("workloads/" + m.metadata.name, manifest.toYaml(m), "orchweb");
+    }
+
+    pub async fn teardown(self: ControlPlane, name: string): bool {
+        let s = await self.ensure();
+        return await s.del("workloads/" + name);
+    }
+
+    pub async fn serviceCount(self: ControlPlane): int {
+        let ss = await self.services();
+        return ss.size();
+    }
+}
+
+// ── manifest -> ServiceView mapping (lives with the repository; entities stay dependency-free) ──────────
+fn routesCsv(m: manifest.Manifest): string {
+    let parts = list.List<string>();
+    let i = 0;
+    while (i < m.routes.size()) { parts.push(m.routes.get(i) ?? ""); i = i + 1; }
+    return string.join(parts, ", ");
+}
+
+// Desired replica slots, labelled with the endpoint + isolation each gets (mirrors manifest.toSpec).
+fn replicaSlots(m: manifest.Manifest): list.List<cluster.ReplicaView> {
+    let out = list.List<cluster.ReplicaView>();
+    let mode = manifest.isolationMode(m);
+    let n = if (m.replicas.min < 1) 1 else m.replicas.min;
+    let port = if (m.network.portBase > 0) m.network.portBase else 8080;
+    let i = 0;
+    while (i < n) {
+        let ep = "";
+        if (string.eql(mode, "public")) { ep = `port ${m.network.portBase + i}`; }
+        else if (m.lb.handoff) { ep = `gateway :${m.network.servicePort}`; }
+        else if (string.eql(mode, "netns")) { ep = `10.66.${i}.2:${port}`; }
+        else { ep = `127.0.0.1:${port}`; }
+        out.push(cluster.ReplicaView(i, ep, mode));
+        i = i + 1;
+    }
+    return out;
+}
+
+pub fn viewOf(yaml: string): cluster.ServiceView {
+    let m = manifest.parseManifest(yaml);
+    let v = cluster.ServiceView();
+    v.name = m.metadata.name;
+    v.binary = m.workload.binary;
+    v.restartPolicy = m.workload.restartPolicy;
+    v.replicasMin = m.replicas.min;
+    v.replicasMax = m.replicas.max;
+    v.expose = m.network.expose;
+    v.servicePort = m.network.servicePort;
+    v.portBase = m.network.portBase;
+    v.portFlag = m.network.portFlag;
+    v.lbStrategy = m.lb.strategy;
+    v.handoff = m.lb.handoff;
+    v.autoEnabled = m.autoscale.enabled;
+    v.metric = m.autoscale.metric;
+    v.setpoint = m.autoscale.setpoint;
+    v.healthPath = m.health.path;
+    v.routesCsv = routesCsv(m);
+    v.isolation = manifest.isolationMode(m);
+    v.replicas = replicaSlots(m);
+    return v;
+}

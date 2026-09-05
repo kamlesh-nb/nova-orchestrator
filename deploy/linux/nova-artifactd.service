@@ -1,18 +1,18 @@
 [Unit]
-Description=Nova artifactd (content-addressed blob store + orchestrator config store)
+Description=Kyte artifactd (content-addressed blob store + orchestrator config store)
 Documentation=https://github.com/kamlesh-nb/nova-orchestrator
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=nova
-Group=nova
-# artifactd is env-configured: NOVA_ARTIFACT_ROOT (blobs + config.snap live here), NOVA_PORT (default
-# 8135), NOVA_ARTIFACT_TOKEN (deploy bearer token; empty = auth OFF, dev only). Put the token in the
-# EnvironmentFile below (mode 0640, root:nova) so it is not world-readable in the unit.
-Environment=NOVA_ARTIFACT_ROOT=/var/lib/nova-orchestrator/artifacts
-Environment=NOVA_PORT=8135
+User=kyte
+Group=kyte
+# artifactd is env-configured: KYTE_ARTIFACT_ROOT (blobs + config.snap live here), KYTE_PORT (default
+# 8135), KYTE_ARTIFACT_TOKEN (deploy bearer token; empty = auth OFF, dev only). Put the token in the
+# EnvironmentFile below (mode 0640, root:kyte) so it is not world-readable in the unit.
+Environment=KYTE_ARTIFACT_ROOT=/var/lib/nova-orchestrator/artifacts
+Environment=KYTE_PORT=8135
 EnvironmentFile=-/etc/nova-orchestrator/artifactd.env
 ExecStart=/opt/nova-orchestrator/bin/artifactd
 WorkingDirectory=/var/lib/nova-orchestrator

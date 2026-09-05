@@ -7,7 +7,7 @@ name: release
 # arch. We do NOT cross-compile (`build.sh --target` aborts when cross-building the C++ runtime on the
 # CI hosts); native per-runner builds are the proven path, exactly as lang's release does.
 #
-# The orchestrator is NOVA code, so each runner builds the lang toolchain (with LLVM) first, then runs
+# The orchestrator is KYTE code, so each runner builds the lang toolchain (with LLVM) first, then runs
 # `build.sh --release` for its own host arch.
 #
 # LINUX ONLY -- same scope as ci.yml. The orchestrator is a Linux/POSIX production concern (its
@@ -19,7 +19,7 @@ name: release
 #
 # Monorepo layout is reconstructed by checking out three repos into fixed paths (as in ci.yml):
 #   lang/  <- kamlesh-nb/nova   packages/nova-orchestrator/ <- this repo   packages/nova-novadb/ <- driver
-# If those repos are private, set NOVA_TOKEN to a PAT with read access (falls back to GITHUB_TOKEN).
+# If those repos are private, set KYTE_TOKEN to a PAT with read access (falls back to GITHUB_TOKEN).
 
 on:
   push:
@@ -35,7 +35,7 @@ permissions:
   contents: write
 
 env:
-  NOVA_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+  KYTE_VERSION: ${{ github.event.inputs.version || github.ref_name }}
 
 jobs:
   build:
@@ -54,12 +54,12 @@ jobs:
         with:
           repository: kamlesh-nb/nova
           path: lang
-          token: ${{ secrets.NOVA_TOKEN || github.token }}
+          token: ${{ secrets.KYTE_TOKEN || github.token }}
       - uses: actions/checkout@v4
         with:
           repository: kamlesh-nb/nova-novadb
           path: packages/nova-novadb
-          token: ${{ secrets.NOVA_TOKEN || github.token }}
+          token: ${{ secrets.KYTE_TOKEN || github.token }}
       - uses: mlugg/setup-zig@v2
         with: { version: 0.16.0 }
 
@@ -67,23 +67,23 @@ jobs:
         run: |
           if [ "${{ matrix.os }}" = "macos" ]; then
             brew install llvm@21 || brew install llvm
-            echo "NOVA_LLVM_PREFIX=$(brew --prefix llvm@21 2>/dev/null || brew --prefix llvm)" >> "$GITHUB_ENV"
+            echo "KYTE_LLVM_PREFIX=$(brew --prefix llvm@21 2>/dev/null || brew --prefix llvm)" >> "$GITHUB_ENV"
           else
             wget -qO- https://apt.llvm.org/llvm.sh | sudo bash -s -- 21
             sudo apt-get install -y llvm-21-dev libclang-21-dev clang-21 zlib1g-dev libzstd-dev libxml2-dev liblzma-dev
             sudo ln -sf "$(command -v clang++-21)" /usr/local/bin/clang++
-            echo "NOVA_LLVM_PREFIX=/usr/lib/llvm-21" >> "$GITHUB_ENV"
+            echo "KYTE_LLVM_PREFIX=/usr/lib/llvm-21" >> "$GITHUB_ENV"
           fi
 
-      # ReleaseFast: a Debug nova's leak gate exits 1 on every `nova build`. Installs `nova` to ~/.nova/bin.
-      - name: Build the Nova toolchain (ReleaseFast)
+      # ReleaseFast: a Debug kyte's leak gate exits 1 on every `kyte build`. Installs `kyte` to ~/.kyte/bin.
+      - name: Build the Kyte toolchain (ReleaseFast)
         working-directory: lang
         run: zig build -Doptimize=ReleaseFast
 
       - name: Build the orchestrator (native)
         working-directory: packages/nova-orchestrator
         run: |
-          export PATH="$HOME/.nova/bin:$PATH"
+          export PATH="$HOME/.kyte/bin:$PATH"
           ./build.sh --release
 
       - name: Package the bundle
@@ -92,7 +92,7 @@ jobs:
           mkdir -p out
           d="build/release/bin"
           if [ ! -d "$d" ]; then echo "no $d"; exit 1; fi
-          base="nova-orchestrator-${NOVA_VERSION}-${{ matrix.os }}-${{ matrix.arch }}"
+          base="nova-orchestrator-${KYTE_VERSION}-${{ matrix.os }}-${{ matrix.arch }}"
           tar -C "$d" -czf "out/${base}.tar.gz" .
           if command -v sha256sum >/dev/null 2>&1; then ( cd out && sha256sum "${base}.tar.gz" > "${base}.tar.gz.sha256" ); \
           else ( cd out && shasum -a 256 "${base}.tar.gz" > "${base}.tar.gz.sha256" ); fi
@@ -123,8 +123,8 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.NOVA_VERSION }}
-          name: Nova orchestrator ${{ env.NOVA_VERSION }}
+          tag_name: ${{ env.KYTE_VERSION }}
+          name: Kyte orchestrator ${{ env.KYTE_VERSION }}
           generate_release_notes: true
           files: |
             out/nova-orchestrator-*.tar.gz

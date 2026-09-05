@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- launchd daemon for Nova service (data-plane gateway). install.sh substitutes the @...@ tokens.
-     In fd-handoff mode the replicas reach an AF_UNIX rendezvous at /tmp/nova-service.sock (override with
-     NOVA_HANDOFF_SOCK); keep that path short (sun_path caps ~104 bytes on macOS). -->
+<!-- launchd daemon for Kyte service (data-plane gateway). install.sh substitutes the @...@ tokens.
+     In fd-handoff mode the replicas reach an AF_UNIX rendezvous at /tmp/kyte-service.sock (override with
+     KYTE_HANDOFF_SOCK); keep that path short (sun_path caps ~104 bytes on macOS). -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.nova.service</string>
+    <string>com.ky.service</string>
     <key>ProgramArguments</key>
     <array>
         <string>@BIN_DIR@/service</string>
