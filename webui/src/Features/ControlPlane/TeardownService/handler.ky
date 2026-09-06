@@ -1,19 +1,21 @@
-// Deletes a service's desired state, then refreshes the tree, resets the detail panel, and reports the result.
+// Deletes a service's desired state, then refreshes the tree, resets the detail panel, and reports the
+// result. The service name is the {name} route parameter.
 import string;
 import list;
 import web.response;
-import Features.ControlPlane.TeardownService.command;
-import Features.ControlPlane.Shared.store;
+import web.routing;
+import Features.ControlPlane.Shared.repo;
 import Features.ControlPlane.Shared.sse;
 import Features.ControlPlane.views.tree;
 import Features.ControlPlane.views.detail;
 
-pub struct TeardownServiceHandler impl RequestHandler<TeardownService, Response> {
-    cp: store.ControlPlane,
-    init(cp: store.ControlPlane) { self.cp = cp; }
-    async fn handle(self: TeardownServiceHandler, q: TeardownService): Response {
-        let existed = await self.cp.teardown(q.name);
-        let msg = if (existed) "Tore down " + q.name + "." else "No such service: " + q.name + ".";
+pub struct TeardownServiceHandler impl RouteHandler {
+    cp: repo.ControlPlane,
+    init(cp: repo.ControlPlane) { self.cp = cp; }
+    async fn serve(self: TeardownServiceHandler, ctx: routing.Context): Response {
+        let name = ctx.param("name");
+        let existed = await self.cp.teardown(name);
+        let msg = if (existed) "Tore down " + name + "." else "No such service: " + name + ".";
         let t = tree.treeView(await self.cp.nodes(), await self.cp.services(), "", "");
         return await sse.three(t, detail.welcome(), detail.toast(msg, existed));
     }

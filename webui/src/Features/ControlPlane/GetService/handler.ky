@@ -1,14 +1,15 @@
-// Loads a service's manifest editor into #detail.
+// Loads a service's manifest editor into #detail. The service name is the {name} route parameter.
 import web.response;
-import Features.ControlPlane.GetService.query;
-import Features.ControlPlane.Shared.store;
+import web.routing;
+import Features.ControlPlane.Shared.repo;
 import Features.ControlPlane.Shared.sse;
 import Features.ControlPlane.views.detail;
 
-pub struct GetServiceHandler impl RequestHandler<GetService, Response> {
-    cp: store.ControlPlane,
-    init(cp: store.ControlPlane) { self.cp = cp; }
-    async fn handle(self: GetServiceHandler, q: GetService): Response {
-        return await sse.one(detail.servicePanel(await self.cp.service(q.name)));
+pub struct GetServiceHandler impl RouteHandler {
+    cp: repo.ControlPlane,
+    init(cp: repo.ControlPlane) { self.cp = cp; }
+    async fn serve(self: GetServiceHandler, ctx: routing.Context): Response {
+        let name = ctx.param("name");
+        return await sse.one(detail.servicePanel(await self.cp.service(name)));
     }
 }

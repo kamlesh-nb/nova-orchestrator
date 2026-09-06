@@ -1,28 +1,25 @@
-// ControlPlane -- the app's repository, injected into every handler. It owns the NovaDB config store the
-// fleet reconciles from and exposes the reads (nodes, services) and writes (deploy, scale, teardown) the UI
-// needs, in terms of the domain read model (Domain/entities/cluster). It also maps a stored YAML manifest
-// to/from a ServiceView.
+// ControlPlane -- the app's repository, held by every handler. It talks to the SAME config store the
+// fleet reconciles from -- now artifactd's `/cfg/*` HTTP surface (the control-plane store moved off NovaDB
+// onto artifactd), reached through `store.httpconfig.HttpConfigStore` exactly as kynatord does. It exposes
+// the reads (nodes, services) and writes (deploy, scale, teardown) the UI needs, in terms of the domain
+// read model (Domain/entities/cluster), and maps a stored YAML manifest to/from a ServiceView.
 //
-// Connecting is asynchronous and must run on the reactor, so we do NOT connect in the constructor; we
-// connect lazily on the first async use inside a handler, create the config schema once, and seed the local
-// node if the cluster is empty (so the tree is never blank). Same rule as the guide's KyteDbConnection.
+// The store client is built lazily on the first async use inside a handler (a ping/no-op schema step),
+// and the local node is seeded if the cluster is empty (so the tree is never blank).
 import list;
 import map;
 import string;
-import data.db;
-import novadb;
-import store.sqlconfig;
+import store.httpconfig;
 import store.config;
 import orch.manifest;
 import Domain.entities.cluster;
 
-pub struct ControlPlane impl Service {
-    driver: KyteDriver,
-    dsn: string,
+pub struct ControlPlane {
+    base: string,
+    token: string,
     nodeId: string,
     advertise: string,
-    conn: Connection | undefined,
-    cfgStore: sqlconfig.SqlConfigStore | undefined,
+    cfgStore: httpconfig.HttpConfigStore | undefined,
     seeded: bool,
     // Parsed-manifest cache, keyed by the raw stored YAML. A manifest's YAML is stable between edits, so
     // this parses each distinct manifest once instead of on every request (every /api/tree read used to
@@ -30,12 +27,11 @@ pub struct ControlPlane impl Service {
     // deploy/scale writes new YAML under a new key, so a stale view is never served.
     views: Map<string, cluster.ServiceView>,
 
-    init(dsn: string, nodeId: string, advertise: string) {
-        self.driver = KyteDriver();
-        self.dsn = dsn;
+    init(base: string, token: string, nodeId: string, advertise: string) {
+        self.base = base;
+        self.token = token;
         self.nodeId = nodeId;
         self.advertise = advertise;
-        self.conn = undefined;
         self.cfgStore = undefined;
         self.seeded = false;
         self.views = Map<string, cluster.ServiceView>(16, string.hash);
@@ -50,16 +46,14 @@ pub struct ControlPlane impl Service {
         return v;
     }
 
-    async fn ensure(self: ControlPlane): sqlconfig.SqlConfigStore {
-        // Reuse one SqlConfigStore for the lifetime of the connection. Building a fresh wrapper on every
-        // request left one owned wrapper per call stranded in the async frame (a per-request leak); the
-        // single cached instance is created once on first connect.
+    async fn ensure(self: ControlPlane): httpconfig.HttpConfigStore {
+        // Reuse one HttpConfigStore for the app's lifetime. Building a fresh client on every request left
+        // one owned wrapper per call stranded in the async frame (a per-request leak); the single cached
+        // instance is created once on first use.
         let cached = self.cfgStore;
         if (cached != undefined) { return cached; }
-        let c = await self.driver.connect(self.dsn);
-        let s = sqlconfig.SqlConfigStore(c);
+        let s = httpconfig.HttpConfigStore(self.base, self.token);
         await s.ensureSchema();
-        self.conn = c;
         self.cfgStore = s;
         if (!self.seeded) {
             let members = await s.list("members/");

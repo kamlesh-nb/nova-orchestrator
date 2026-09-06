@@ -1,15 +1,16 @@
-// Loads a node's information panel into #detail.
+// Loads a node's information panel into #detail. The node id is the {id} route parameter.
 import web.response;
-import Features.ControlPlane.GetNode.query;
-import Features.ControlPlane.Shared.store;
+import web.routing;
+import Features.ControlPlane.Shared.repo;
 import Features.ControlPlane.Shared.sse;
 import Features.ControlPlane.views.detail;
 
-pub struct GetNodeHandler impl RequestHandler<GetNode, Response> {
-    cp: store.ControlPlane,
-    init(cp: store.ControlPlane) { self.cp = cp; }
-    async fn handle(self: GetNodeHandler, q: GetNode): Response {
-        let node = await self.cp.node(q.id);
+pub struct GetNodeHandler impl RouteHandler {
+    cp: repo.ControlPlane,
+    init(cp: repo.ControlPlane) { self.cp = cp; }
+    async fn serve(self: GetNodeHandler, ctx: routing.Context): Response {
+        let id = ctx.param("id");
+        let node = await self.cp.node(id);
         let count = await self.cp.serviceCount();
         return await sse.one(detail.nodePanel(node, count));
     }
